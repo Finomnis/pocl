@@ -156,6 +156,27 @@ AC_ARG_ENABLE([region-allocator],
 [],
 [AC_DEFINE([CUSTOM_BUFFER_ALLOCATOR], [], "Use a custom buffer allocator")])
 
+
+####################################################################
+# HPX Configuration
+
+AC_LANG_PUSH([C++])
+
+# add -std=c++11 to g++
+AX_CXX_COMPILE_STDCXX_11(noext, mandatory)
+
+# get hpx path from command line argument
+AC_ARG_WITH([hpx], [AS_HELP_STRING([--with-hpx],
+            [sets the HPX directory])], [], [AC_MSG_FAILURE([HPX directory not set! (add --with-hpx=<hpx_dir>)])])
+
+# add include and lib directories
+CXXFLAGS="$CXXFLAGS -I$with_hpx/include"
+LDFLAGS="$LDFLAGS -L$with_hpx/lib/hpx"
+
+#TODO: add functionality test
+
+AC_LANG_POP([C++])
+
 ####################################################################
 # Manage optional testsuites
 
