@@ -598,41 +598,64 @@ AX_CXX_COMPILE_STDCXX_11(noext, mandatory)
 
 # search boost
 AX_BOOST_BASE([1.51], [], AC_MSG_FAILURE([BOOST not found!]))
-CXXFLAGS="$CXXFLAGS $BOOST_CPPFLAGS"
 
 # get hpx path from command line argument
 AC_ARG_WITH([hpx], [AS_HELP_STRING([--with-hpx],
             [sets the HPX directory])], [], [AC_MSG_FAILURE([HPX directory not set! (add --with-hpx=<hpx_dir>)])])
 
-# add include and lib directories
-CXXFLAGS="$CXXFLAGS -I$with_hpx/include -I$with_hpx/include/hpx/external"
-LDFLAGS="$LDFLAGS -L$with_hpx/lib/hpx"
-
+HPX_INCLUDE_FLAGS="-I$with_hpx/include -I$with_hpx/include/hpx/external $BOOST_CPPFLAGS"
+HPX_LINK_FLAGS="-L$with_hpx/lib/hpx $BOOST_LDFLAGS"
 if test "x$debug" = "xno"
 then
     # Release libs
-    LIBS="$LIBS -lhpx"
+    HPX_LIBS="-lhpx"
 else
     # Debug libs
-    LIBS="$LIBS -lhpxd"
+    HPX_LIBS="-lhpxd"
 fi
+
+
+
+# add hpx temporarily for compiler test
+old_CXXFLAGS=$CXXFLAGS
+old_LDFLAGS=$LDFLAGS
+old_LIBS=$LIBS
+CXXFLAGS="$AM_CXXFLAGS $CXXFLAGS $HPX_INCLUDE_FLAGS"
+LDFLAGS="$AM_LDFLAGS $LDFLAGS $HPX_LINK_FLAGS"
+LIBS="$LIBS $HPX_LIBS"
+
 
 #TODO: add functionality test
 
-#HPX_TESTMAIN="#include<hpx/hpx_init.hpp>"
+HPX_TESTMAIN="#include<hpx/hpx_init.hpp>
+              int hpx_main(int argc, char* argv[])
+              {
+                  return hpx::finalize();
+              }
+              int main(int argc, char* argv[])
+              {
+                  return hpx::init(argc, argv);
+              }"
 
-## check for hpx library headers   
-#AC_MSG_CHECKING([for the HPX library headers])
-## try to compile a file that includes a header of the library HPX
-#AC_COMPILE_IFELSE([[$HPX_TESTMAIN]],
-#    [AC_MSG_RESULT([found])
-#        FOUND_HPX=1;],
-#    [AC_MSG_RESULT([not found])
-#        FOUND_HPX=0;])
+# check for hpx library headers   
+AC_MSG_CHECKING([for the HPX library headers])
+# try to compile a file that includes a header of the library HPX
+AC_COMPILE_IFELSE([[ #include<hpx/hpx_init.hpp> ]],
+    [AC_MSG_RESULT([found])
+        FOUND_HPX=1;],
+    [AC_MSG_RESULT([not found])
+        FOUND_HPX=0;])
+
+
+
+# restore old flags
+CXXFLAGS=$old_CXXFLAGS
+LDFLAGS=$old_LDFLAGS
+LIBS=$old_LIBS
 
 AC_LANG_POP([C++])
 
-#AC_MSG_ERROR([breakpoint])
+AC_MSG_ERROR([breakpoint: $HPX_TESTMAIN])
 
 #
 ####################################################################
