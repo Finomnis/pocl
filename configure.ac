@@ -156,27 +156,6 @@ AC_ARG_ENABLE([region-allocator],
 [],
 [AC_DEFINE([CUSTOM_BUFFER_ALLOCATOR], [], "Use a custom buffer allocator")])
 
-
-####################################################################
-# HPX Configuration
-
-AC_LANG_PUSH([C++])
-
-# add -std=c++11 to g++
-AX_CXX_COMPILE_STDCXX_11(noext, mandatory)
-
-# get hpx path from command line argument
-AC_ARG_WITH([hpx], [AS_HELP_STRING([--with-hpx],
-            [sets the HPX directory])], [], [AC_MSG_FAILURE([HPX directory not set! (add --with-hpx=<hpx_dir>)])])
-
-# add include and lib directories
-CXXFLAGS="$CXXFLAGS -I$with_hpx/include"
-LDFLAGS="$LDFLAGS -L$with_hpx/lib/hpx"
-
-#TODO: add functionality test
-
-AC_LANG_POP([C++])
-
 ####################################################################
 # Manage optional testsuites
 
@@ -609,6 +588,54 @@ then
 	CFLAGS="$CFLAGS -Wno-unused-result -Werror"
 fi
 
+####################################################################
+# HPX Configuration
+
+AC_LANG_PUSH([C++])
+
+# add -std=c++11 to g++
+AX_CXX_COMPILE_STDCXX_11(noext, mandatory)
+
+# search boost
+AX_BOOST_BASE([1.51], [], AC_MSG_FAILURE([BOOST not found!]))
+CXXFLAGS="$CXXFLAGS $BOOST_CPPFLAGS"
+
+# get hpx path from command line argument
+AC_ARG_WITH([hpx], [AS_HELP_STRING([--with-hpx],
+            [sets the HPX directory])], [], [AC_MSG_FAILURE([HPX directory not set! (add --with-hpx=<hpx_dir>)])])
+
+# add include and lib directories
+CXXFLAGS="$CXXFLAGS -I$with_hpx/include -I$with_hpx/include/hpx/external"
+LDFLAGS="$LDFLAGS -L$with_hpx/lib/hpx"
+
+if test "x$debug" = "xno"
+then
+    # Release libs
+    LIBS="$LIBS -lhpx"
+else
+    # Debug libs
+    LIBS="$LIBS -lhpxd"
+fi
+
+#TODO: add functionality test
+
+#HPX_TESTMAIN="#include<hpx/hpx_init.hpp>"
+
+## check for hpx library headers   
+#AC_MSG_CHECKING([for the HPX library headers])
+## try to compile a file that includes a header of the library HPX
+#AC_COMPILE_IFELSE([[$HPX_TESTMAIN]],
+#    [AC_MSG_RESULT([found])
+#        FOUND_HPX=1;],
+#    [AC_MSG_RESULT([not found])
+#        FOUND_HPX=0;])
+
+AC_LANG_POP([C++])
+
+#AC_MSG_ERROR([breakpoint])
+
+#
+####################################################################
 
 PKG_CHECK_MODULES([GLEW], [glew], 
   [
