@@ -603,15 +603,20 @@ AX_BOOST_BASE([1.51], [], AC_MSG_FAILURE([BOOST not found!]))
 AC_ARG_WITH([hpx], [AS_HELP_STRING([--with-hpx],
             [sets the HPX directory])], [], [AC_MSG_FAILURE([HPX directory not set! (add --with-hpx=<hpx_dir>)])])
 
-HPX_INCLUDE_FLAGS="-I$with_hpx/include -I$with_hpx/include/hpx/external $BOOST_CPPFLAGS"
-HPX_LINK_FLAGS="-L$with_hpx/lib/hpx $BOOST_LDFLAGS"
+#HPX_INCLUDE_FLAGS="-I$with_hpx/include -I$with_hpx/include/hpx/external $BOOST_CPPFLAGS"
+#HPX_LINK_FLAGS="-L$with_hpx/lib/hpx $BOOST_LDFLAGS"
+
 if test "x$debug" = "xno"
 then
     # Release libs
-    HPX_LIBS="-lhpx"
+    HPX_LIBS="-liostreams"
+    HPX_INCLUDE_FLAGS=`PKG_CONFIG_PATH=$PKG_CONFIG_PATH:$with_hpx/lib/pkgconfig pkg-config --cflags hpx_application`
+    HPX_LINK_FLAGS=`PKG_CONFIG_PATH=$PKG_CONFIG_PATH:$with_hpx/lib/pkgconfig pkg-config --libs hpx_application`
 else
     # Debug libs
-    HPX_LIBS="-lhpxd"
+    HPX_LIBS="-liostreamsd"
+    HPX_INCLUDE_FLAGS=`PKG_CONFIG_PATH=$PKG_CONFIG_PATH:$with_hpx/lib/pkgconfig pkg-config --cflags hpx_application_debug`
+    HPX_LINK_FLAGS=`PKG_CONFIG_PATH=$PKG_CONFIG_PATH:$with_hpx/lib/pkgconfig pkg-config --libs hpx_application_debug`
 fi
 
 
@@ -642,20 +647,45 @@ AC_MSG_CHECKING([for the HPX library headers])
 # try to compile a file that includes a header of the library HPX
 AC_COMPILE_IFELSE([[ #include<hpx/hpx_init.hpp> ]],
     [AC_MSG_RESULT([found])
-        FOUND_HPX=1;],
+        AC_MSG_CHECKING([whether the HPX library can be linked])
+        AC_LINK_IFELSE(
+            [AC_LANG_SOURCE([$HPX_TESTMAIN])],
+            [AC_MSG_RESULT([yes])
+                FOUND_HPX=1;],
+            [AC_MSG_RESULT([no])
+                FOUND_HPX=1;])],
     [AC_MSG_RESULT([not found])
         FOUND_HPX=0;])
 
-
+#AC_MSG_NOTICE([CXXFLAGS: $CXXFLAGS])
+#AC_MSG_NOTICE([LDFLAGS:  $LDFLAGS])
+#AC_MSG_NOTICE([LIBS:     $LIBS])
 
 # restore old flags
 CXXFLAGS=$old_CXXFLAGS
 LDFLAGS=$old_LDFLAGS
 LIBS=$old_LIBS
 
-AC_LANG_POP([C++])
 
-AC_MSG_ERROR([breakpoint: $HPX_TESTMAIN])
+if test $FOUND_HPX != 1; then
+        AC_MSG_NOTICE([])
+        AC_MSG_NOTICE([The HPX library was not found!])
+    if test  $XXXPATHSET = 1 ; then
+        AC_MSG_NOTICE([ The install prefix '$with_HPX' for the HPX library was set.])
+        AC_MSG_NOTICE([ --> Maybe wrong ???])
+    else
+        AC_MSG_NOTICE([ No non-standard install prefix was set.])
+        AC_MSG_NOTICE([ --> You might want to use '--with-hpx=PREFIX' ?!?])
+    fi
+    AC_MSG_NOTICE([])
+    AC_MSG_ERROR([ HPX library is an essential dependency : cannot build and stop here !])
+fi
+
+AC_SUBST(HPX_INCLUDE_FLAGS)
+LDFLAGS="$LDFLAGS $HPX_LINK_FLAGS"
+LIBS="$LIBS $HPX_LIBS"
+
+AC_LANG_POP([C++])
 
 #
 ####################################################################
