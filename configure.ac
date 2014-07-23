@@ -618,7 +618,7 @@ fi
 
 
 
-# add hpx temporarily for compiler test
+# add hpx to flags for test compilation
 old_CXXFLAGS=$CXXFLAGS
 old_LDFLAGS=$LDFLAGS
 old_LIBS=$LIBS
@@ -626,20 +626,16 @@ CXXFLAGS="$HPX_INCLUDE_FLAGS"
 LDFLAGS=""
 LIBS="$HPX_LINK_FLAGS $HPX_LIBS"
 
-#TODO: find out why HPX_TESTSRC_BIG doesn't compile, while rest of project compiles fine
 
-HPX_TESTSRC_BIG="#include<hpx/hpx_init.hpp>
-                 int hpx_main(int argc, char* argv[])
-                 {
-                     return hpx::finalize();
-                 }
-                 int main(int argc, char* argv[])
-                 {
-                     return hpx::init(argc, argv);
-                 }"
-
-HPX_TESTSRC_SMALL="#include <hpx/hpx_init.hpp>
-                   int main(int argc, char*argv[]){return 0;}"
+HPX_TESTSRC="#include<hpx/hpx_init.hpp>
+             int hpx_main(int argc, char** argv)
+             {
+                 return hpx::finalize();
+             }
+             int main(int argc, char** argv)
+             {
+                 return hpx::init(argc, argv);
+             }"
 
 # check for hpx library headers   
 AC_MSG_CHECKING([for the HPX library headers])
@@ -648,9 +644,16 @@ AC_COMPILE_IFELSE([[ #include<hpx/hpx_init.hpp> ]],
     [AC_MSG_RESULT([found])
         AC_MSG_CHECKING([whether the HPX library can be linked])
         AC_LINK_IFELSE(
-            [AC_LANG_SOURCE([[$HPX_TESTSRC_SMALL]])],
+            [AC_LANG_SOURCE([[$HPX_TESTSRC]])],
             [AC_MSG_RESULT([yes])
-                FOUND_HPX=1;],
+                AC_MSG_CHECKING([whether the resulting HPX binary can be executed])
+                if ./conftest$EXEEXT 2>&5 >&5; then
+                    AC_MSG_RESULT([yes])
+                    FOUND_HPX=1
+                else
+                    AC_MSG_RESULT([no])
+                    FOUND_HPX=0
+                fi],
             [AC_MSG_RESULT([no])
                 FOUND_HPX=0;])],
     [AC_MSG_RESULT([not found])
