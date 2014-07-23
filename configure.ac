@@ -561,10 +561,6 @@ LTDL_LIBS="$LIBS"
 AC_SUBST([LTDL_LIBS])
 LIBS="$old_LIBS"
 
-# Following checks are related to the build system for devices (clang and so),
-# and not for building the host code.
-AC_MSG_NOTICE([Starting OpenCL runtime build system checks])
-
 AC_ARG_ENABLE([debug],
 AS_HELP_STRING([--enable-debug], [enable debug build of pocl (default is no)]),
 [debug=$enableval],
@@ -601,7 +597,8 @@ AX_BOOST_BASE([1.51], [], AC_MSG_FAILURE([BOOST not found!]))
 
 # get hpx path from command line argument
 AC_ARG_WITH([hpx], [AS_HELP_STRING([--with-hpx],
-            [sets the HPX directory])], [], [AC_MSG_FAILURE([HPX directory not set! (add --with-hpx=<hpx_dir>)])])
+            [sets the HPX directory])], [HPXPATHSET=1], [HPXPATHSET=0
+              AC_MSG_FAILURE([HPX directory not set! (add --with-hpx=<hpx_dir>)])])
 
 #HPX_INCLUDE_FLAGS="-I$with_hpx/include -I$with_hpx/include/hpx/external $BOOST_CPPFLAGS"
 #HPX_LINK_FLAGS="-L$with_hpx/lib/hpx $BOOST_LDFLAGS"
@@ -625,22 +622,24 @@ fi
 old_CXXFLAGS=$CXXFLAGS
 old_LDFLAGS=$LDFLAGS
 old_LIBS=$LIBS
-CXXFLAGS="$AM_CXXFLAGS $CXXFLAGS $HPX_INCLUDE_FLAGS"
-LDFLAGS="$AM_LDFLAGS $LDFLAGS $HPX_LINK_FLAGS"
-LIBS="$LIBS $HPX_LIBS"
+CXXFLAGS="$HPX_INCLUDE_FLAGS"
+LDFLAGS=""
+LIBS="$HPX_LINK_FLAGS $HPX_LIBS"
 
+#TODO: find out why HPX_TESTSRC_BIG doesn't compile, while rest of project compiles fine
 
-#TODO: add functionality test
+HPX_TESTSRC_BIG="#include<hpx/hpx_init.hpp>
+                 int hpx_main(int argc, char* argv[])
+                 {
+                     return hpx::finalize();
+                 }
+                 int main(int argc, char* argv[])
+                 {
+                     return hpx::init(argc, argv);
+                 }"
 
-HPX_TESTMAIN="#include<hpx/hpx_init.hpp>
-              int hpx_main(int argc, char* argv[])
-              {
-                  return hpx::finalize();
-              }
-              int main(int argc, char* argv[])
-              {
-                  return hpx::init(argc, argv);
-              }"
+HPX_TESTSRC_SMALL="#include <hpx/hpx_init.hpp>
+                   int main(int argc, char*argv[]){return 0;}"
 
 # check for hpx library headers   
 AC_MSG_CHECKING([for the HPX library headers])
@@ -649,17 +648,13 @@ AC_COMPILE_IFELSE([[ #include<hpx/hpx_init.hpp> ]],
     [AC_MSG_RESULT([found])
         AC_MSG_CHECKING([whether the HPX library can be linked])
         AC_LINK_IFELSE(
-            [AC_LANG_SOURCE([$HPX_TESTMAIN])],
+            [AC_LANG_SOURCE([[$HPX_TESTSRC_SMALL]])],
             [AC_MSG_RESULT([yes])
                 FOUND_HPX=1;],
             [AC_MSG_RESULT([no])
-                FOUND_HPX=1;])],
+                FOUND_HPX=0;])],
     [AC_MSG_RESULT([not found])
         FOUND_HPX=0;])
-
-#AC_MSG_NOTICE([CXXFLAGS: $CXXFLAGS])
-#AC_MSG_NOTICE([LDFLAGS:  $LDFLAGS])
-#AC_MSG_NOTICE([LIBS:     $LIBS])
 
 # restore old flags
 CXXFLAGS=$old_CXXFLAGS
@@ -667,12 +662,17 @@ LDFLAGS=$old_LDFLAGS
 LIBS=$old_LIBS
 
 
-if test $FOUND_HPX != 1; then
+if test "$FOUND_HPX" != "1"; then
         AC_MSG_NOTICE([])
         AC_MSG_NOTICE([The HPX library was not found!])
-    if test  $XXXPATHSET = 1 ; then
-        AC_MSG_NOTICE([ The install prefix '$with_HPX' for the HPX library was set.])
+    if test "$HPXPATHSET" = "1" ; then
+        AC_MSG_NOTICE([ The install prefix '$with_hpx' for the HPX library was set.])
         AC_MSG_NOTICE([ --> Maybe wrong ???])
+        if test "x$debug" = "xno"; then
+            AC_MSG_NOTICE([ --> Also make sure HPX is built in RELEASE mode.])
+        else
+            AC_MSG_NOTICE([ --> Also make sure HPX is built in DEBUG mode.])
+        fi
     else
         AC_MSG_NOTICE([ No non-standard install prefix was set.])
         AC_MSG_NOTICE([ --> You might want to use '--with-hpx=PREFIX' ?!?])
@@ -682,13 +682,18 @@ if test $FOUND_HPX != 1; then
 fi
 
 AC_SUBST(HPX_INCLUDE_FLAGS)
-LDFLAGS="$LDFLAGS $HPX_LINK_FLAGS"
-LIBS="$LIBS $HPX_LIBS"
+AC_SUBST(HPX_LINK_FLAGS)
+AC_SUBST(HPX_LIBS)
 
 AC_LANG_POP([C++])
 
 #
 ####################################################################
+
+
+# Following checks are related to the build system for devices (clang and so),
+# and not for building the host code.
+AC_MSG_NOTICE([Starting OpenCL runtime build system checks])
 
 PKG_CHECK_MODULES([GLEW], [glew], 
   [
@@ -1353,6 +1358,7 @@ AC_CONFIG_FILES([Makefile
                  include/OpenCL/Makefile
                  lib/Makefile
                  lib/CL/Makefile
+                 lib/CL/hpx-threads/Makefile
                  lib/CL/devices/Makefile
                  lib/CL/devices/pthread/Makefile
                  lib/CL/devices/basic/Makefile
