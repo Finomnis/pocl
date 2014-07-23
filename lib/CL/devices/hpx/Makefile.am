@@ -1,9 +1,8 @@
 # Process this file with automake to produce Makefile.in (in this,
 # and all subdirectories).
-# Makefile.am for pocl/lib/devices.
+# Makefile.am for pocl/lib/CL/devices/hpx.
 # 
-# Copyright (c) 2011-2012 Universidad Rey Juan Carlos and 
-#                         Tampere University of Technology
+# Copyright (c) 2014 Martin Stumpf / The Ste||ar Group
 # 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -23,31 +22,12 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 
-SUBDIRS = topology pthread basic hpx
+noinst_LTLIBRARIES = libpocl-devices-hpx.la
 
-noinst_LTLIBRARIES = libpocl-devices.la
+libpocl_devices_hpx_la_SOURCES = pocl-hpx.h hpx.c
 
-libpocl_devices_la_SOURCES = devices.h devices.c bufalloc.c dev_image.h \
-	prototypes.inc common.h common.c bufalloc.h cpuinfo.c cpuinfo.h
-libpocl_devices_la_LIBADD = pthread/libpocl-devices-pthread.la \
-	basic/libpocl-devices-basic.la topology/libpocl-devices-topology.la \
-	hpx/libpocl-devices-hpx.la
-
-libpocl_devices_la_CPPFLAGS = \
-  -I$(top_srcdir)/fix-include \
-  -I$(top_srcdir)/include \
-  -I$(top_srcdir)/lib/CL/devices \
-  -I$(top_srcdir)/lib/CL/devices/tce \
-  -I$(top_srcdir)/lib/CL \
-  $(OCL_ICD_CFLAGS)
-
-if TCE_AVAILABLE
-SUBDIRS += tce
-libpocl_devices_la_LIBADD += tce/libpocl-devices-tce.la
-endif
-
-if BUILD_SPU
-SUBDIRS += cellspu
-libpocl_devices_la_LIBADD += cellspu/libpocl-devices-cellspu.la
-endif
+libpocl_devices_hpx_la_CPPFLAGS = -I$(top_srcdir)/fix-include -I$(top_srcdir)/include -I$(top_srcdir)/lib/CL/devices -I$(top_srcdir)/lib/CL $(OCL_ICD_CFLAGS)
+#libpocl_devices_hpx_la_CPPFLAGS += @HPX_INCLUDE_FLAGS@
+libpocl_devices_hpx_la_LDFLAGS = -lltdl @PTHREAD_CFLAGS@ --version-info ${LIB_VERSION}
+#libpocl_devices_hpx_la_LDFLAGS += @HPX_LINK_FLAGS@ @HPX_LIBS@
 

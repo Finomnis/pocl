@@ -1,7 +1,8 @@
-/* OpenCL native pthreaded device implementation.
+/* OpenCL hpx device implementation.
 
    Copyright (c) 2011-2012 Universidad Rey Juan Carlos and
                            Pekka Jääskeläinen / Tampere Univ. of Technology
+                      2014 Martin Stumpf
    
    Permission is hereby granted, free of charge, to any person obtaining a copy
    of this software and associated documentation files (the "Software"), to deal
@@ -22,7 +23,7 @@
    THE SOFTWARE.
 */
 
-#include "pocl-pthread.h"
+#include "pocl-hpx.h"
 #include "install-paths.h"
 #include <assert.h>
 #include <pthread.h>
@@ -146,33 +147,33 @@ static void free_thread_arguments (thread_arguments *ta)
 }
 
 void
-pocl_pthread_init_device_ops(struct pocl_device_ops *ops)
+pocl_hpx_init_device_ops(struct pocl_device_ops *ops)
 {
   pocl_basic_init_device_ops(ops);
 
-  ops->device_name = "pthread";
+  ops->device_name = "HPX";
 
   /* implementation */
-  ops->probe = pocl_pthread_probe;
-  ops->init_device_infos = pocl_pthread_init_device_infos;
-  ops->uninit = pocl_pthread_uninit;
-  ops->init = pocl_pthread_init;
-  ops->alloc_mem_obj = pocl_pthread_alloc_mem_obj;
-  ops->free = pocl_pthread_free;
-  ops->read = pocl_pthread_read;
-  ops->write = pocl_pthread_write;
-  ops->copy = pocl_pthread_copy;
-  ops->copy_rect = pocl_pthread_copy_rect;
-  ops->run = pocl_pthread_run;
+  ops->probe = pocl_hpx_probe;
+  ops->init_device_infos = pocl_hpx_init_device_infos;
+  ops->uninit = pocl_hpx_uninit;
+  ops->init = pocl_hpx_init;
+  ops->alloc_mem_obj = pocl_hpx_alloc_mem_obj;
+  ops->free = pocl_hpx_free;
+  ops->read = pocl_hpx_read;
+  ops->write = pocl_hpx_write;
+  ops->copy = pocl_hpx_copy;
+  ops->copy_rect = pocl_hpx_copy_rect;
+  ops->run = pocl_hpx_run;
   ops->compile_submitted_kernels = pocl_basic_compile_submitted_kernels;
 
 }
 
 unsigned int
-pocl_pthread_probe(struct pocl_device_ops *ops)
+pocl_hpx_probe(struct pocl_device_ops *ops)
 {
   int env_count = pocl_device_get_env_count(ops->device_name);
-  /* Env was not specified, default behavior was to use 1 pthread device */
+  /* Env was not specified, default behavior was to use 1 hpx device */
   if(env_count < 0)
     return 1;
 
@@ -180,7 +181,7 @@ pocl_pthread_probe(struct pocl_device_ops *ops)
 }
 
 void
-pocl_pthread_init_device_infos(struct _cl_device_id* dev)
+pocl_hpx_init_device_infos(struct _cl_device_id* dev)
 {
   pocl_basic_init_device_infos(dev);
 
@@ -194,7 +195,7 @@ pocl_pthread_init_device_infos(struct _cl_device_id* dev)
 }
 
 void
-pocl_pthread_init (cl_device_id device, const char* parameters)
+pocl_hpx_init (cl_device_id device, const char* parameters)
 {
   struct data *d; 
   static mem_regions_management* mrm = NULL;
@@ -271,7 +272,7 @@ pocl_pthread_init (cl_device_id device, const char* parameters)
 }
 
 void
-pocl_pthread_uninit (cl_device_id device)
+pocl_hpx_uninit (cl_device_id device)
 {
   struct data *d = (struct data*)device->data;
 #ifdef CUSTOM_BUFFER_ALLOCATOR
@@ -360,7 +361,7 @@ allocate_aligned_buffer (struct data* d, void **memptr, size_t alignment, size_t
 #endif
 
 void *
-pocl_pthread_malloc (void *device_data, cl_mem_flags flags, size_t size, void *host_ptr)
+pocl_hpx_malloc (void *device_data, cl_mem_flags flags, size_t size, void *host_ptr)
 {
   void *b;
   struct data* d = (struct data*)device_data;
@@ -388,7 +389,7 @@ pocl_pthread_malloc (void *device_data, cl_mem_flags flags, size_t size, void *h
 }
 
 cl_int
-pocl_pthread_alloc_mem_obj (cl_device_id device, cl_mem mem_obj)
+pocl_hpx_alloc_mem_obj (cl_device_id device, cl_mem mem_obj)
 {
   void *b = NULL;
   struct data* d = (struct data*)device->data;
@@ -421,7 +422,7 @@ pocl_pthread_alloc_mem_obj (cl_device_id device, cl_mem mem_obj)
 
 #ifdef CUSTOM_BUFFER_ALLOCATOR
 void
-pocl_pthread_free (void *device_data, cl_mem_flags flags, void *ptr)
+pocl_hpx_free (void *device_data, cl_mem_flags flags, void *ptr)
 {
   struct data* d = (struct data*) device_data;
   memory_region_t *region = NULL;
@@ -453,7 +454,7 @@ pocl_pthread_free (void *device_data, cl_mem_flags flags, void *ptr)
 #else
 
 void
-pocl_pthread_free (void *data, cl_mem_flags flags, void *ptr)
+pocl_hpx_free (void *data, cl_mem_flags flags, void *ptr)
 {
   if (flags & CL_MEM_COPY_HOST_PTR)
     return;
@@ -463,7 +464,7 @@ pocl_pthread_free (void *data, cl_mem_flags flags, void *ptr)
 #endif
 
 void
-pocl_pthread_read (void *data, void *host_ptr, const void *device_ptr, size_t cb)
+pocl_hpx_read (void *data, void *host_ptr, const void *device_ptr, size_t cb)
 {
   if (host_ptr == device_ptr)
     return;
@@ -472,7 +473,7 @@ pocl_pthread_read (void *data, void *host_ptr, const void *device_ptr, size_t cb
 }
 
 void
-pocl_pthread_write (void *data, const void *host_ptr, void *device_ptr, size_t cb)
+pocl_hpx_write (void *data, const void *host_ptr, void *device_ptr, size_t cb)
 {
   if (host_ptr == device_ptr)
     return;
@@ -482,7 +483,7 @@ pocl_pthread_write (void *data, const void *host_ptr, void *device_ptr, size_t c
 
 
 void
-pocl_pthread_copy (void *data, const void *src_ptr, void *__restrict__ dst_ptr, size_t cb)
+pocl_hpx_copy (void *data, const void *src_ptr, void *__restrict__ dst_ptr, size_t cb)
 {
   if (src_ptr == dst_ptr)
     return;
@@ -491,7 +492,7 @@ pocl_pthread_copy (void *data, const void *src_ptr, void *__restrict__ dst_ptr, 
 }
 
 void
-pocl_pthread_copy_rect (void *data,
+pocl_hpx_copy_rect (void *data,
                         const void *__restrict const src_ptr,
                         void *__restrict__ const dst_ptr,
                         const size_t *__restrict__ const src_origin,
@@ -540,7 +541,7 @@ get_max_thread_count(cl_device_id device)
 }
 
 void
-pocl_pthread_run 
+pocl_hpx_run 
 (void *data, 
  _cl_command_node* cmd)
 {
@@ -633,10 +634,10 @@ pocl_pthread_run
 }
 
 void *
-pocl_pthread_map_mem (void *data, void *buf_ptr, 
+pocl_hpx_map_mem (void *data, void *buf_ptr, 
                       size_t offset, size_t size, void* host_ptr) 
 {
-  /* All global pointers of the pthread/CPU device are in 
+  /* All global pointers of the hpx/CPU device are in 
      the host address space already, and up to date. */     
   return buf_ptr + offset;
 }
@@ -662,7 +663,7 @@ workgroup_thread (void *p)
       if (kernel->arg_info[i].is_local)
         {
           arguments[i] = malloc (sizeof (void *));
-          *(void **)(arguments[i]) = pocl_pthread_malloc(ta->data, 0, al->size, NULL);
+          *(void **)(arguments[i]) = pocl_hpx_malloc(ta->data, 0, al->size, NULL);
         }
       else if (kernel->arg_info[i].type == POCL_ARG_TYPE_POINTER)
       {
@@ -685,19 +686,19 @@ workgroup_thread (void *p)
         {
           dev_image_t di;
           fill_dev_image_t(&di, al, ta->device);
-          void* devptr = pocl_pthread_malloc(ta->data, 0, sizeof(dev_image_t), NULL);
+          void* devptr = pocl_hpx_malloc(ta->data, 0, sizeof(dev_image_t), NULL);
           arguments[i] = malloc (sizeof (void *));
           *(void **)(arguments[i]) = devptr;       
-          pocl_pthread_write (ta->data, &di, devptr, sizeof(dev_image_t));
+          pocl_hpx_write (ta->data, &di, devptr, sizeof(dev_image_t));
         }
       else if (kernel->arg_info[i].type == POCL_ARG_TYPE_SAMPLER)
         {
           dev_sampler_t ds;
           
           arguments[i] = malloc (sizeof (void *));
-          *(void **)(arguments[i]) = pocl_pthread_malloc 
+          *(void **)(arguments[i]) = pocl_hpx_malloc 
             (ta->data, 0, sizeof(dev_sampler_t), NULL);
-          pocl_pthread_write (ta->data, &ds, *(void**)arguments[i], 
+          pocl_hpx_write (ta->data, &ds, *(void**)arguments[i], 
                               sizeof(dev_sampler_t));
         }
       else
@@ -712,7 +713,7 @@ workgroup_thread (void *p)
     {
       al = &(ta->kernel_args[i]);
       arguments[i] = malloc (sizeof (void *));
-      *(void **)(arguments[i]) = pocl_pthread_malloc (ta->data, 0, al->size, 
+      *(void **)(arguments[i]) = pocl_hpx_malloc (ta->data, 0, al->size, 
                                                       NULL);
     }
 
@@ -736,7 +737,7 @@ workgroup_thread (void *p)
     {
       if (kernel->arg_info[i].is_local )
         {
-          pocl_pthread_free (ta->data, 0, *(void **)(arguments[i]));
+          pocl_hpx_free (ta->data, 0, *(void **)(arguments[i]));
           free (arguments[i]);
         }
       else if (kernel->arg_info[i].type == POCL_ARG_TYPE_SAMPLER || kernel->arg_info[i].type == POCL_ARG_TYPE_IMAGE || 
@@ -749,7 +750,7 @@ workgroup_thread (void *p)
        i < kernel->num_args + kernel->num_locals;
        ++i)
     {
-      pocl_pthread_free (ta->data, 0, *(void **)(arguments[i]));
+      pocl_hpx_free (ta->data, 0, *(void **)(arguments[i]));
       free (arguments[i]);
     }
   free_thread_arguments (ta);

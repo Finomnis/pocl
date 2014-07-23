@@ -30,6 +30,7 @@
 #include "common.h"
 #include "basic/basic.h"
 #include "pthread/pocl-pthread.h"
+#include "hpx/pocl-hpx.h"
 
 #include <pthread.h>
 
@@ -54,6 +55,7 @@ typedef void (*init_device_ops)(struct pocl_device_ops*);
 static init_device_ops pocl_devices_init_ops[] = {
   pocl_pthread_init_device_ops,
   pocl_basic_init_device_ops,
+  pocl_hpx_init_device_ops,
 #if defined(BUILD_SPU)
   pocl_cellspu_init_device_ops,
 #endif

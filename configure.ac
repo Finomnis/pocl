@@ -1110,7 +1110,7 @@ fi
 ####################################################################
 # Determine which device drivers to build.
 
-OCL_DRIVERS="basic pthreads"
+OCL_DRIVERS="basic pthreads hpx"
 
 # look for the TCE library (needed for the ttasim device driver)
 AC_PATH_PROG([TCE_CONFIG], [tce-config])
@@ -1364,6 +1364,7 @@ AC_CONFIG_FILES([Makefile
                  lib/CL/hpx-threads/Makefile
                  lib/CL/devices/Makefile
                  lib/CL/devices/pthread/Makefile
+                 lib/CL/devices/hpx/Makefile
                  lib/CL/devices/basic/Makefile
                  lib/CL/devices/tce/Makefile
                  lib/CL/devices/tce/ttasim/Makefile
