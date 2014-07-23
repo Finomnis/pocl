@@ -31,6 +31,8 @@
 #include "basic/basic.h"
 #include "pthread/pocl-pthread.h"
 
+#include <pthread.h>
+
 #if defined(BUILD_SPU)
 #include "cellspu/cellspu.h"
 #endif
@@ -160,17 +162,17 @@ void
 pocl_init_devices()
 {
   static unsigned int init_done = 0;
-  static pocl_lock_t pocl_init_lock = POCL_LOCK_INITIALIZER;
+  static pthread_mutex_t pocl_init_lock = PTHREAD_MUTEX_INITIALIZER;
 
   int i, j, dev_index;
   char env_name[1024];
   char dev_name[MAX_DEV_NAME_LEN] = {0};
   unsigned int device_count[POCL_NUM_DEVICE_TYPES];
 
-  POCL_LOCK(pocl_init_lock);
+  pthread_mutex_lock(&pocl_init_lock);
   if (init_done) 
     {
-      POCL_UNLOCK(pocl_init_lock);
+      pthread_mutex_unlock(&pocl_init_lock);
       return;
     }
 
@@ -223,5 +225,5 @@ pocl_init_devices()
     }
 
   init_done = 1;
-  POCL_UNLOCK(pocl_init_lock);
+  pthread_mutex_unlock(&pocl_init_lock);
 }

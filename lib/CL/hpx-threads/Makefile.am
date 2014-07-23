@@ -23,28 +23,10 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 
-#lib_LTLIBRARIES = libhpxthread.la
-bin_PROGRAMS = hpxtest
+noinst_LTLIBRARIES = libhpxthread.la
 
+libhpxthread_la_SOURCES = mutex.cpp	
 
-#libhpxthread_la_SOURCES = test.cpp	
-hpxtest_SOURCES = test.cpp
+libhpxthread_la_CPPFLAGS = @HPX_INCLUDE_FLAGS@
+libhpxthread_la_LDFLAGS = @HPX_LINK_FLAGS@ @HPX_LIBS@
 
-hpxtest_CPPFLAGS = @HPX_INCLUDE_FLAGS@
-hpxtest_LDFLAGS = @HPX_LINK_FLAGS@ @HPX_LIBS@
-
-#libpocl_la_CPPFLAGS = -I$(top_srcdir)/fix-include -I$(top_srcdir)/fix-include/OpenCL -I$(top_srcdir)/include -I$(top_srcdir)/lib/CL/devices $(OCL_ICD_CFLAGS)
-#libpocl_la_LDFLAGS = -lltdl @PTHREAD_CFLAGS@ -version-info ${LIB_VERSION}
-#libpocl_la_LDFLAGS += -Wl,-z,defs 
-
-#libpocl_la_LIBADD = devices/libpocl-devices.la
-#libpocl_la_LIBADD += ${LTDL_LIBS}
-
-#Kludge: compile pocl_llvm_api.cc into a library of its own.
-#The source file is necessarely a C++ file, and having a C++ file
-#causes the entire pocl project to be linked with g++, which in turn
-#exposes a gcc/autoconf m4 macro issue
-# see: http://stackoverflow.com/questions/17055279/autotools-for-pthreads-not-setting-correct-linker-flags
-#noinst_LTLIBRARIES = libpoclllvm.la
-
-#CLEANFILES = hpxtest
