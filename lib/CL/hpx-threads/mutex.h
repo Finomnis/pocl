@@ -30,10 +30,10 @@ extern "C" {
 
     typedef void* hpx_mutex_t;
 
-    int hpx_mutex_init(void**);
-    int hpx_mutex_destroy(void**);
-    int hpx_mutex_lock(void**);
-    int hpx_mutex_unlock(void**);
+    int hpx_mutex_init   ( hpx_mutex_t* );
+    int hpx_mutex_destroy( hpx_mutex_t* );
+    int hpx_mutex_lock   ( hpx_mutex_t* );
+    int hpx_mutex_unlock ( hpx_mutex_t* );
 
 #ifdef __cplusplus
 }

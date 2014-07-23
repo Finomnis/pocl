@@ -32,10 +32,10 @@ static boost::atomic<size_t> num_locks((size_t)0);
 
 typedef hpx::lcos::local::spinlock lock_type;
 
-int hpx_mutex_init(void** lock_raw)
+int hpx_mutex_init(hpx_mutex_t* lock_raw)
 {
     try {
-        *lock_raw = (void*) new lock_type();
+        *lock_raw = (hpx_mutex_t) new lock_type();
     } catch (hpx::exception e) {
         std::cerr << "Error while initializing lock!" << std::endl;
         exit(1);
@@ -44,7 +44,7 @@ int hpx_mutex_init(void** lock_raw)
     return 0;   
 }
 
-int hpx_mutex_destroy(void** lock_raw)
+int hpx_mutex_destroy(hpx_mutex_t* lock_raw)
 {
     try {
         lock_type* lock = (lock_type*) *lock_raw;
@@ -60,7 +60,7 @@ int hpx_mutex_destroy(void** lock_raw)
     return 0;
 }
 
-int hpx_mutex_lock(void** lock_raw)
+int hpx_mutex_lock(hpx_mutex_t* lock_raw)
 {
     try {
         lock_type* lock = (lock_type*) *lock_raw;
@@ -72,7 +72,7 @@ int hpx_mutex_lock(void** lock_raw)
     return 0;
 }
 
-int hpx_mutex_unlock(void** lock_raw)
+int hpx_mutex_unlock(hpx_mutex_t* lock_raw)
 {
     try {
         lock_type* lock = (lock_type*) *lock_raw;
