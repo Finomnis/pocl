@@ -40,7 +40,8 @@ int hpx_mutex_init(hpx_mutex_t* lock_raw)
         std::cerr << "Error while initializing lock!" << std::endl;
         exit(1);
     }
-    num_locks++;
+    size_t current_num_locks = ++num_locks;
+    std::cout << "mutex init!    (" << current_num_locks << " left)" << std::endl;
     return 0;   
 }
 
