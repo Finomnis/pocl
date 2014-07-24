@@ -690,6 +690,8 @@ AC_SUBST(HPX_LIBS)
 
 AC_LANG_POP([C++])
 
+AC_DEFINE([BUILD_HPX], [], [Defined when HPX is found])
+AM_CONDITIONAL([BUILD_HPX], true)
 #
 ####################################################################
 

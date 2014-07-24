@@ -29,7 +29,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <ltdl.h>
-#include "hpx-threads/mutex.h"
+#include <pthread.h>
 
 #define CL_USE_DEPRECATED_OPENCL_1_1_APIS
 #ifdef BUILD_ICD
@@ -93,15 +93,16 @@
 #define POCL_ERROR(x) do { if (errcode_ret != NULL) {*errcode_ret = (x); } return NULL; } while (0)
 #define POCL_SUCCESS() do { if (errcode_ret != NULL) {*errcode_ret = CL_SUCCESS; } } while (0)
 
-typedef hpx_mutex_t pocl_lock_t;
+typedef pthread_mutex_t pocl_lock_t;
+#define POCL_LOCK_INITIALIZER PTHREAD_MUTEX_INITIALIZER
 
 /* Generic functionality for handling different types of 
    OpenCL (host) objects. */
 
-#define POCL_LOCK(__LOCK__) hpx_mutex_lock (&(__LOCK__))
-#define POCL_UNLOCK(__LOCK__) hpx_mutex_unlock (&(__LOCK__))
-#define POCL_INIT_LOCK(__LOCK__) hpx_mutex_init (&(__LOCK__))
-#define POCL_DESTROY_LOCK(__LOCK__) hpx_mutex_destroy (&(__LOCK__))
+#define POCL_LOCK(__LOCK__) pthread_mutex_lock (&(__LOCK__))
+#define POCL_UNLOCK(__LOCK__) pthread_mutex_unlock (&(__LOCK__))
+#define POCL_INIT_LOCK(__LOCK__) pthread_mutex_init (&(__LOCK__), NULL)
+#define POCL_DESTROY_LOCK(__LOCK__) pthread_mutex_destroy (&(__LOCK__))
 
 #define POCL_LOCK_OBJ(__OBJ__) POCL_LOCK((__OBJ__)->pocl_lock)
 #define POCL_UNLOCK_OBJ(__OBJ__) POCL_UNLOCK((__OBJ__)->pocl_lock)
@@ -145,6 +146,9 @@ typedef hpx_mutex_t pocl_lock_t;
 #define POCL_OBJECT \
   pocl_lock_t pocl_lock; \
   int pocl_refcount 
+
+#define POCL_OBJECT_INIT \
+  POCL_LOCK_INITIALIZER, 0
 
 #ifdef __APPLE__
 /* Note: OSX doesn't support aliases because it doesn't use ELF */

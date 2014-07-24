@@ -30,9 +30,10 @@
 #include "common.h"
 #include "basic/basic.h"
 #include "pthread/pocl-pthread.h"
-#include "hpx/pocl-hpx.h"
 
-#include <pthread.h>
+#if defined(BUILD_HPX)
+#include "hpx/pocl-hpx.h"
+#endif
 
 #if defined(BUILD_SPU)
 #include "cellspu/cellspu.h"
@@ -55,7 +56,9 @@ typedef void (*init_device_ops)(struct pocl_device_ops*);
 static init_device_ops pocl_devices_init_ops[] = {
   pocl_pthread_init_device_ops,
   pocl_basic_init_device_ops,
+#if defined(BUILD_HPX)
   pocl_hpx_init_device_ops,
+#endif
 #if defined(BUILD_SPU)
   pocl_cellspu_init_device_ops,
 #endif
@@ -164,17 +167,17 @@ void
 pocl_init_devices()
 {
   static unsigned int init_done = 0;
-  static pthread_mutex_t pocl_init_lock = PTHREAD_MUTEX_INITIALIZER;
+  static pocl_lock_t pocl_init_lock = POCL_LOCK_INITIALIZER;
 
   int i, j, dev_index;
   char env_name[1024];
   char dev_name[MAX_DEV_NAME_LEN] = {0};
   unsigned int device_count[POCL_NUM_DEVICE_TYPES];
 
-  pthread_mutex_lock(&pocl_init_lock);
+  POCL_LOCK(pocl_init_lock);
   if (init_done) 
     {
-      pthread_mutex_unlock(&pocl_init_lock);
+      POCL_UNLOCK(pocl_init_lock);
       return;
     }
 
@@ -227,5 +230,5 @@ pocl_init_devices()
     }
 
   init_done = 1;
-  pthread_mutex_unlock(&pocl_init_lock);
+  POCL_UNLOCK(pocl_init_lock);
 }
