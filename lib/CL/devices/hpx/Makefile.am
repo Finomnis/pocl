@@ -22,12 +22,17 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 
-noinst_LTLIBRARIES = libpocl-devices-hpx.la
+noinst_LTLIBRARIES = libpocl-devices-hpx.la libpocl-devices-hpx-ext.la
 
-libpocl_devices_hpx_la_SOURCES = pocl-hpx.h hpx.c
+# c device driver lib
+libpocl_devices_hpx_la_SOURCES = pocl-hpx.h hpx-ext.h hpx.c
 
 libpocl_devices_hpx_la_CPPFLAGS = -I$(top_srcdir)/fix-include -I$(top_srcdir)/include -I$(top_srcdir)/lib/CL/devices -I$(top_srcdir)/lib/CL $(OCL_ICD_CFLAGS)
-#libpocl_devices_hpx_la_CPPFLAGS += @HPX_INCLUDE_FLAGS@
 libpocl_devices_hpx_la_LDFLAGS = -lltdl @PTHREAD_CFLAGS@ --version-info ${LIB_VERSION}
-#libpocl_devices_hpx_la_LDFLAGS += @HPX_LINK_FLAGS@ @HPX_LIBS@
+libpocl_devices_hpx_la_LIBADD = libpocl-devices-hpx-ext.la
 
+# external cpp lib, as hpx is written in c++
+libpocl_devices_hpx_ext_la_SOURCES = hpx-ext.h hpx-ext.cpp
+
+libpocl_devices_hpx_ext_la_CPPFLAGS = @HPX_INCLUDE_FLAGS@
+libpocl_devices_hpx_ext_la_LDFLAGS = @HPX_LINK_FLAGS@ @HPX_LIBS@

@@ -41,6 +41,8 @@
 #include "pocl_util.h"
 #include "pocl_mem_management.h"
 
+#include "hpx-ext.h"
+
 #ifdef CUSTOM_BUFFER_ALLOCATOR
 
 #include "bufalloc.h"
@@ -534,6 +536,7 @@ get_max_thread_count(cl_device_id device)
 {
   /* if return THREAD_COUNT_ENV if set, 
      else return fallback or max_compute_units */
+         printf("max_compute_units: %d\n", device->max_compute_units);
   if (device->max_compute_units == 0)
     return pocl_get_int_option (THREAD_COUNT_ENV, FALLBACK_MAX_THREAD_COUNT);
   else
@@ -579,7 +582,7 @@ pocl_hpx_run
     max_threads = get_max_thread_count(device_ptr);
 
   int num_threads = min(max_threads, num_groups_x);
-  pthread_t *threads = (pthread_t*) malloc (sizeof (pthread_t)*num_threads);
+  hpx_thread_t *threads = (hpx_thread_t*) malloc (sizeof (hpx_thread_t)*num_threads);
   
   int wgs_per_thread = num_groups_x / num_threads;
   /* In case the work group count is not divisible by the
@@ -616,19 +619,13 @@ pocl_hpx_run
     arguments->kernel_args = cmd->command.run.arguments;
 
     /* TODO: pool of worker threads to avoid syscalls here */
-    error = pthread_create (&threads[i],
-                            NULL,
-                            workgroup_thread,
-                            arguments);
+    error = hpx_thread_create (&threads[i],
+                               workgroup_thread,
+                               arguments);
     assert(!error);
   }
 
-  for (i = 0; i < num_threads; ++i) {
-    pthread_join(threads[i], NULL);
-#ifdef DEBUG_MT       
-    printf("### thread %u finished\n", (unsigned)threads[i]);
-#endif
-  }
+  hpx_threads_join(threads, num_threads);
 
   free(threads);
 }
