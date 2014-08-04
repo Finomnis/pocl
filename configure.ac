@@ -690,7 +690,6 @@ if test "x$HPXPATHSET" = "x1"; then
         AC_SUBST(HPX_LIBS)
     
         AC_DEFINE([BUILD_HPX], [], [Defined when HPX is found])
-        AM_CONDITIONAL([BUILD_HPX], true)
 
     else
         AC_MSG_ERROR([Unable to add HPX, compiler does not support C++11!])
@@ -698,6 +697,7 @@ if test "x$HPXPATHSET" = "x1"; then
 
 fi
 
+AM_CONDITIONAL([BUILD_HPX], test "x$FOUND_HPX" = "x1")
 
 AC_LANG_POP([C++])
 
