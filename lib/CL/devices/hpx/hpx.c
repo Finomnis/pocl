@@ -130,7 +130,7 @@ static thread_arguments* new_thread_arguments ()
 {
   thread_arguments *ta = NULL;
   POCL_LOCK (ta_pool_lock);
-  if (ta = thread_argument_pool)
+  if ((ta = thread_argument_pool))
     {
       LL_DELETE (thread_argument_pool, ta);
       POCL_UNLOCK (ta_pool_lock);
@@ -643,7 +643,9 @@ void *
 workgroup_thread (void *p)
 {
   struct thread_arguments *ta = (struct thread_arguments *) p;
-  void *arguments[ta->kernel->num_args + ta->kernel->num_locals];
+  size_t arguments_len = ta->kernel->num_args + ta->kernel->num_locals;
+  void *arguments[arguments_len];
+  void *arguments_ind[arguments_len];
   struct pocl_argument *al;  
   unsigned i = 0;
 
@@ -659,7 +661,7 @@ workgroup_thread (void *p)
       al = &(ta->kernel_args[i]);
       if (kernel->arg_info[i].is_local)
         {
-          arguments[i] = malloc (sizeof (void *));
+          arguments[i] = &arguments_ind[i];
           *(void **)(arguments[i]) = pocl_hpx_malloc(ta->data, 0, al->size, NULL);
         }
       else if (kernel->arg_info[i].type == POCL_ARG_TYPE_POINTER)
@@ -670,7 +672,7 @@ workgroup_thread (void *p)
            pointers stored in the cl_mem. */
         if (al->value == NULL) 
           {
-            arguments[i] = malloc (sizeof (void *));
+            arguments[i] = &arguments_ind[i];
             *(void **)arguments[i] = NULL;
           }
         else
@@ -684,7 +686,7 @@ workgroup_thread (void *p)
           dev_image_t di;
           fill_dev_image_t(&di, al, ta->device);
           void* devptr = pocl_hpx_malloc(ta->data, 0, sizeof(dev_image_t), NULL);
-          arguments[i] = malloc (sizeof (void *));
+          arguments[i] = &arguments_ind[i];
           *(void **)(arguments[i]) = devptr;       
           pocl_hpx_write (ta->data, &di, devptr, sizeof(dev_image_t));
         }
@@ -692,10 +694,10 @@ workgroup_thread (void *p)
         {
           dev_sampler_t ds;
           
-          arguments[i] = malloc (sizeof (void *));
-          *(void **)(arguments[i]) = pocl_hpx_malloc 
+          arguments[i] = &arguments_ind[i];
+          *(void **)(arguments[i]) = pocl_hpx_malloc
             (ta->data, 0, sizeof(dev_sampler_t), NULL);
-          pocl_hpx_write (ta->data, &ds, *(void**)arguments[i], 
+          pocl_hpx_write (ta->data, &ds, *(void**)arguments[i],
                               sizeof(dev_sampler_t));
         }
       else
@@ -709,8 +711,8 @@ workgroup_thread (void *p)
        ++i)
     {
       al = &(ta->kernel_args[i]);
-      arguments[i] = malloc (sizeof (void *));
-      *(void **)(arguments[i]) = pocl_hpx_malloc (ta->data, 0, al->size, 
+      arguments[i] = &arguments_ind[i];
+      *(void **)(arguments[i]) = pocl_hpx_malloc (ta->data, 0, al->size,
                                                       NULL);
     }
 
@@ -725,7 +727,7 @@ workgroup_thread (void *p)
               ta->pc.group_id[0] = gid_x;
               ta->pc.group_id[1] = gid_y;
               ta->pc.group_id[2] = gid_z;
-              ta->workgroup (arguments, &(ta->pc));              
+              ta->workgroup (arguments, &(ta->pc));
             }
         }
     }
@@ -735,12 +737,6 @@ workgroup_thread (void *p)
       if (kernel->arg_info[i].is_local )
         {
           pocl_hpx_free (ta->data, 0, *(void **)(arguments[i]));
-          free (arguments[i]);
-        }
-      else if (kernel->arg_info[i].type == POCL_ARG_TYPE_SAMPLER || kernel->arg_info[i].type == POCL_ARG_TYPE_IMAGE || 
-               (kernel->arg_info[i].type == POCL_ARG_TYPE_POINTER && *(void**)arguments[i] == NULL))
-        {
-          free (arguments[i]);
         }
     }
   for (i = kernel->num_args;
@@ -748,7 +744,6 @@ workgroup_thread (void *p)
        ++i)
     {
       pocl_hpx_free (ta->data, 0, *(void **)(arguments[i]));
-      free (arguments[i]);
     }
   free_thread_arguments (ta);
 
