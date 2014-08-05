@@ -29,11 +29,29 @@
 extern "C" {
 #endif
 
+    // threading
     typedef void* hpx_thread_t;
     int hpx_thread_create(hpx_thread_t*, void*(*)(void*), void* arg);
     int hpx_threads_join(hpx_thread_t*, size_t num_threads);
 
+    ////////////////////////////
+    /// MEMPOOL
+    ///
 
+    // adds a buffer to the mempool
+    void mempool_release_clmem(void* mem, size_t size);
+
+    // takes a buffer from the mempool.
+    // returns NULL if no buffer of that size exists.
+    void* mempool_get_clmem(size_t size);
+
+    // "invalidates" all buffers, meaning, they do not have the content we need.
+    void mempool_invalidade_all_buffers();
+    // checks if a buffer is "invalidated".
+    void mempool_is_buffer_valid(void*);
+
+    // removes all buffers from the mempool and returns them in an array
+    void** mempool_take_and_remove_all_buffers();
 
 #ifdef __cplusplus
 }
