@@ -31,6 +31,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <unistd.h>
+#include <stdbool.h>
 #include "pocl_runtime_config.h"
 #include "utlist.h"
 #include "cpuinfo.h"
@@ -79,7 +80,8 @@
 #define THREAD_COUNT_ENV "POCL_MAX_PTHREAD_COUNT"
 
 typedef struct thread_arguments thread_arguments;
-struct thread_arguments 
+/*
+struct thread_arguments_old 
 {
   void *data;
   cl_kernel kernel;
@@ -89,6 +91,23 @@ struct thread_arguments
   pocl_workgroup workgroup;
   struct pocl_argument *kernel_args;
   thread_arguments *volatile next;
+};
+*/
+
+struct thread_arguments
+{
+    void *data; //? no idea what this is for
+    // pointer to global pocl context
+    struct pocl_context *pc_global;
+    // array of local pocl contexts
+    struct pocl_context **pc_local;
+    pocl_workgroup workgroup;
+    // one set of arguments per thread. (arguments is void**)
+    struct pocl_argument *kernel_args;
+    void*** wg_arguments;
+    bool* initialized;
+    cl_kernel kernel;
+    unsigned int device;
 };
 
 typedef struct _mem_regions_management{
@@ -111,42 +130,8 @@ struct data {
 };
 
 
-static thread_arguments *volatile thread_argument_pool = 0;
-static int argument_pool_initialized = 0;
-pocl_lock_t ta_pool_lock;
 static int get_max_thread_count();
-static void * workgroup_thread (void *p);
-
-static void pocl_init_thread_argument_manager (void)
-{
-  if (!argument_pool_initialized)
-    {
-      argument_pool_initialized = 1;
-      POCL_INIT_LOCK (ta_pool_lock);
-    }
-}
-
-static thread_arguments* new_thread_arguments ()
-{
-  thread_arguments *ta = NULL;
-  POCL_LOCK (ta_pool_lock);
-  if ((ta = thread_argument_pool))
-    {
-      LL_DELETE (thread_argument_pool, ta);
-      POCL_UNLOCK (ta_pool_lock);
-      return ta;
-    }
-  POCL_UNLOCK (ta_pool_lock);
-    
-  return calloc (1, sizeof (thread_arguments));
-}
-
-static void free_thread_arguments (thread_arguments *ta)
-{
-  POCL_LOCK (ta_pool_lock);
-  LL_PREPEND (thread_argument_pool, ta);
-  POCL_UNLOCK (ta_pool_lock);
-}
+static void workgroup_thread (void* p, size_t gid_x, size_t gid_y, size_t gid_z);
 
 void
 pocl_hpx_init_device_ops(struct pocl_device_ops *ops)
@@ -187,7 +172,7 @@ pocl_hpx_init_device_infos(struct _cl_device_id* dev)
 {
   pocl_basic_init_device_infos(dev);
 
-  dev->type = CL_DEVICE_TYPE_CPU | CL_DEVICE_TYPE_DEFAULT;
+  dev->type = CL_DEVICE_TYPE_CPU;
   /* This could be SIZE_T_MAX, but setting it to INT_MAX should suffice, */
   /* and may avoid errors in user code that uses int instead of size_t */
   dev->max_work_item_sizes[0] = 1024;
@@ -269,8 +254,6 @@ pocl_hpx_init (cl_device_id device, const char* parameters)
   device->has_64bit_long=0;
   #endif
 
-  pocl_init_thread_argument_manager();
-  
 }
 
 void
@@ -523,6 +506,15 @@ pocl_hpx_copy_rect (void *data,
               region[0]);
 }
 
+void *
+pocl_hpx_map_mem (void *data, void *buf_ptr, 
+                      size_t offset, size_t size, void* host_ptr) 
+{
+  /* All global pointers of the hpx/CPU device are in 
+     the host address space already, and up to date. */     
+  return buf_ptr + offset;
+}
+
 #define FALLBACK_MAX_THREAD_COUNT 8
 //#define DEBUG_MT
 //#define DEBUG_MAX_THREAD_COUNT
@@ -540,11 +532,203 @@ get_max_thread_count(cl_device_id device)
   if (device->max_compute_units == 0)
     return pocl_get_int_option (THREAD_COUNT_ENV, FALLBACK_MAX_THREAD_COUNT);
   else
-    return pocl_get_int_option(THREAD_COUNT_ENV, device->max_compute_units);
+    return pocl_get_int_option(THREAD_COUNT_ENV, device->max_compute_units * 20);
 }
 
 void
-pocl_hpx_run 
+pocl_hpx_run
+(void* data,
+ _cl_command_node* cmd)
+{
+    unsigned int device;
+    cl_device_id device_ptr;
+    cl_kernel kernel = cmd->command.run.kernel;
+    size_t num_hpx_workers = hpx_get_num_workers();
+
+    // initialize shared arrays
+    struct pocl_context* pc_local[num_hpx_workers];
+    void** wg_arguments[num_hpx_workers];
+    bool initialized[num_hpx_workers];
+    for(size_t i = 0; i < num_hpx_workers; i++)
+    {
+        pc_local[i] = NULL;
+        wg_arguments[i] = NULL;
+        initialized[i] = false;
+    }
+
+    /* Find which device number within the context corresponds
+       to current device. */
+    for (int i = 0; i < kernel->context->num_devices; ++i)
+    {
+        if (kernel->context->devices[i]->data == data)
+        {
+            device = i;
+            device_ptr = kernel->context->devices[i];
+            break;
+        }
+    }
+
+    // initialize thread_arguments 
+    struct thread_arguments ta;
+    ta.data = data;
+    ta.device = device;
+    ta.pc_global = &cmd->command.run.pc;
+    ta.workgroup = cmd->command.run.wg;
+    ta.kernel_args = cmd->command.run.arguments;
+    ta.kernel = cmd->command.run.kernel;
+    ta.pc_local = pc_local;
+    ta.wg_arguments = wg_arguments;
+    ta.initialized = initialized;
+
+    // run kernels
+    hpx_foreach(workgroup_thread, &ta,
+                                  ta.pc_global->num_groups[0],
+                                  ta.pc_global->num_groups[1],
+                                  ta.pc_global->num_groups[2]); 
+    
+    // cleanup thread_arguments
+    for(size_t i = 0; i < num_hpx_workers; i++)
+    {
+        // cleanup only if thread actually initialized it
+        if(ta.initialized[i])
+        {
+            // TODO cleanup locally created workgroup arguments and give them
+            // to the memory manager
+            for (int j = 0; j < kernel->num_args; ++j)
+            {
+                if (kernel->arg_info[j].is_local ||
+                    kernel->arg_info[j].type == POCL_ARG_TYPE_IMAGE ||
+                    kernel->arg_info[j].type == POCL_ARG_TYPE_SAMPLER)
+                {
+                    pocl_hpx_free (ta.data, 0, *(void **)(ta.wg_arguments[i][j]));
+                }
+            }
+            for (int j = kernel->num_args;
+                 j < kernel->num_args + kernel->num_locals;
+                 ++j)
+            {
+                pocl_hpx_free (ta.data, 0, *(void **)(ta.wg_arguments[i][j]));
+            }
+             
+            // free the allocated void* array
+            free(ta.wg_arguments[i]); 
+
+            // cleanup the local copy of pocl_context
+            free(ta.pc_local[i]);
+        }
+    }
+}
+
+void workgroup_thread (void* p, size_t gid_x, size_t gid_y, size_t gid_z)
+{
+    // parse inputs
+    struct thread_arguments *ta = (struct thread_arguments *) p;
+
+    // get the cpu core id
+    size_t hpx_worker_id = hpx_get_worker_id();
+
+    // initialize arguments if necessary.
+    // every core has its own local copy of the input arguments
+    // to avoid crossing numa-domains.
+    if(!ta->initialized[hpx_worker_id])
+    {
+        // get number of thread arguments
+        size_t arguments_len = ta->kernel->num_args + ta->kernel->num_locals;
+
+        // allocate local worker struct
+        ta->wg_arguments[hpx_worker_id] = malloc( 2 * arguments_len
+                                                    * sizeof(void*) );
+
+        // todo: initialize local thread arguments  
+        {
+            void** arguments = ta->wg_arguments[hpx_worker_id];
+            void* arguments_ind = (void*)(arguments + arguments_len);
+            cl_kernel kernel = ta->kernel;
+            struct pocl_argument *al;  
+            for (int i = 0; i < kernel->num_args; ++i)
+              {
+                al = &(ta->kernel_args[i]);
+                if (kernel->arg_info[i].is_local)
+                  {
+                    arguments[i] = &arguments_ind[i];
+                    *(void **)(arguments[i]) = pocl_hpx_malloc(ta->data, 0, al->size, NULL);
+                  }
+                else if (kernel->arg_info[i].type == POCL_ARG_TYPE_POINTER)
+                {
+                  /* It's legal to pass a NULL pointer to clSetKernelArguments. In 
+                     that case we must pass the same NULL forward to the kernel.
+                     Otherwise, the user must have created a buffer with per device
+                     pointers stored in the cl_mem. */
+                  if (al->value == NULL) 
+                    {
+                      arguments[i] = &arguments_ind[i];
+                      *(void **)arguments[i] = NULL;
+                    }
+                  else
+                    {
+                      arguments[i] = 
+                        &((*(cl_mem *)(al->value))->device_ptrs[ta->device].mem_ptr);
+                    }
+                }
+                else if (kernel->arg_info[i].type == POCL_ARG_TYPE_IMAGE)
+                  {
+                    dev_image_t di;
+                    fill_dev_image_t(&di, al, ta->device);
+                    void* devptr = pocl_hpx_malloc(ta->data, 0, sizeof(dev_image_t), NULL);
+                    arguments[i] = &arguments_ind[i];
+                    *(void **)(arguments[i]) = devptr;       
+                    pocl_hpx_write (ta->data, &di, devptr, sizeof(dev_image_t));
+                  }
+                else if (kernel->arg_info[i].type == POCL_ARG_TYPE_SAMPLER)
+                  {
+                    dev_sampler_t ds;
+                    
+                    arguments[i] = &arguments_ind[i];
+                    *(void **)(arguments[i]) = pocl_hpx_malloc
+                      (ta->data, 0, sizeof(dev_sampler_t), NULL);
+                    pocl_hpx_write (ta->data, &ds, *(void**)arguments[i],
+                                        sizeof(dev_sampler_t));
+                  }
+                else
+                  arguments[i] = al->value;
+              }
+          
+            /* Allocate the automatic local buffers which are implemented as implicit
+               extra arguments at the end of the kernel argument list. */
+            for (int i = kernel->num_args;
+                 i < kernel->num_args + kernel->num_locals;
+                 ++i)
+              {
+                al = &(ta->kernel_args[i]);
+                arguments[i] = &arguments_ind[i];
+                *(void **)(arguments[i]) = pocl_hpx_malloc (ta->data, 0, al->size,
+                                                                NULL);
+              }
+        }
+        
+        // initialize pocl context
+        ta->pc_local[hpx_worker_id] = malloc(sizeof(struct pocl_context));
+        *(ta->pc_local[hpx_worker_id]) = *(ta->pc_global);
+
+        // set initialized flag
+        ta->initialized[hpx_worker_id] = true;
+    } 
+
+    // set current group id
+    struct pocl_context *pc = ta->pc_local[hpx_worker_id];
+    pc->group_id[0] = gid_x;
+    pc->group_id[1] = gid_y;
+    pc->group_id[2] = gid_z;
+
+    // do work.
+    // syntax: workgroup(void**, pocl_context*)
+    ta->workgroup(ta->wg_arguments[hpx_worker_id], pc);
+
+}
+
+/*
+void
+pocl_hpx_run_old 
 (void *data, 
  _cl_command_node* cmd)
 {
@@ -557,12 +741,12 @@ pocl_hpx_run
   cl_kernel kernel = cmd->command.run.kernel;
   struct pocl_context *pc = &cmd->command.run.pc;
   struct thread_arguments *arguments;
-  static int max_threads = 0; /* this needs to be asked only once */
+  static int max_threads = 0; // this needs to be asked only once
 
   d = (struct data *) data;
 
-  /* Find which device number within the context correspond
-     to current device.  */
+  // Find which device number within the context correspond
+  // to current device. 
   for (i = 0; i < kernel->context->num_devices; ++i)
     {
       if (kernel->context->devices[i]->data == data)
@@ -575,9 +759,9 @@ pocl_hpx_run
 
 
   int num_groups_x = pc->num_groups[0];
-  /* TODO: distributing the work groups in the x dimension is not always the
-     best option. This assumes x dimension has enough work groups to utilize
-     all the threads. */
+  // TODO: distributing the work groups in the x dimension is not always the
+  // best option. This assumes x dimension has enough work groups to utilize
+  // all the threads. 
   if (max_threads == 0)
     max_threads = get_max_thread_count(device_ptr);
 
@@ -585,11 +769,11 @@ pocl_hpx_run
   hpx_thread_t *threads = (hpx_thread_t*) malloc (sizeof (hpx_thread_t)*num_threads);
   
   int wgs_per_thread = num_groups_x / num_threads;
-  /* In case the work group count is not divisible by the
-     number of threads, we have to execute the remaining
-     workgroups in one of the threads. */
-  /* TODO: This is inefficient; it is better to round up when
-     calculating wgs_per_thread */
+  // In case the work group count is not divisible by the
+  // number of threads, we have to execute the remaining
+  // workgroups in one of the threads.
+  // TODO: This is inefficient; it is better to round up when
+  // calculating wgs_per_thread 
   int leftover_wgs = num_groups_x - (num_threads*wgs_per_thread);
 
 #ifdef DEBUG_MT    
@@ -618,7 +802,7 @@ pocl_hpx_run
     arguments->last_gid_x = last_gid_x;
     arguments->kernel_args = cmd->command.run.arguments;
 
-    /* TODO: pool of worker threads to avoid syscalls here */
+    // TODO: pool of worker threads to avoid syscalls here
     error = hpx_thread_create (&threads[i],
                                workgroup_thread,
                                arguments);
@@ -629,32 +813,25 @@ pocl_hpx_run
 
   free(threads);
 }
+*/
 
+/*
 void *
-pocl_hpx_map_mem (void *data, void *buf_ptr, 
-                      size_t offset, size_t size, void* host_ptr) 
-{
-  /* All global pointers of the hpx/CPU device are in 
-     the host address space already, and up to date. */     
-  return buf_ptr + offset;
-}
-
-void *
-workgroup_thread (void *p)
+workgroup_thread_old (void *p)
 {
   struct thread_arguments *ta = (struct thread_arguments *) p;
   size_t arguments_len = ta->kernel->num_args + ta->kernel->num_locals;
-  void *arguments[arguments_len];
-  void *arguments_ind[arguments_len];
+  void *arguments[2*arguments_len];
+  void arguments_ind = arguments + arguments_len;
   struct pocl_argument *al;  
   unsigned i = 0;
 
-  /* TODO: refactor this to share code with basic.c 
-
-     To function 
-     void setup_kernel_arg_array(void **arguments, cl_kernel kernel)
-     or similar
-  */
+  // TODO: refactor this to share code with basic.c 
+  //
+  // To function 
+  // void setup_kernel_arg_array(void **arguments, cl_kernel kernel)
+  // or similar
+  
   cl_kernel kernel = ta->kernel;
   for (i = 0; i < kernel->num_args; ++i)
     {
@@ -666,10 +843,10 @@ workgroup_thread (void *p)
         }
       else if (kernel->arg_info[i].type == POCL_ARG_TYPE_POINTER)
       {
-        /* It's legal to pass a NULL pointer to clSetKernelArguments. In 
-           that case we must pass the same NULL forward to the kernel.
-           Otherwise, the user must have created a buffer with per device
-           pointers stored in the cl_mem. */
+        // It's legal to pass a NULL pointer to clSetKernelArguments. In 
+        // that case we must pass the same NULL forward to the kernel.
+        // Otherwise, the user must have created a buffer with per device
+        // pointers stored in the cl_mem.
         if (al->value == NULL) 
           {
             arguments[i] = &arguments_ind[i];
@@ -704,8 +881,8 @@ workgroup_thread (void *p)
         arguments[i] = al->value;
     }
 
-  /* Allocate the automatic local buffers which are implemented as implicit
-     extra arguments at the end of the kernel argument list. */
+  // Allocate the automatic local buffers which are implemented as implicit
+  // extra arguments at the end of the kernel argument list.
   for (i = kernel->num_args;
        i < kernel->num_args + kernel->num_locals;
        ++i)
@@ -748,4 +925,4 @@ workgroup_thread (void *p)
   free_thread_arguments (ta);
 
   return NULL;
-}
+}*/

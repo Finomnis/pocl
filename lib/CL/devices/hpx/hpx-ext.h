@@ -29,6 +29,12 @@
 extern "C" {
 #endif
 
+    // generic HPX
+    size_t hpx_get_num_workers();
+    size_t hpx_get_worker_id();
+    void hpx_foreach(void (*)(void*, size_t, size_t, size_t),
+                              void*, size_t, size_t, size_t);
+    
     // threading
     typedef void* hpx_thread_t;
     int hpx_thread_create(hpx_thread_t*, void*(*)(void*), void* arg);

@@ -77,13 +77,23 @@ int hpx_threads_join(hpx_thread_t* threads, size_t num_threads)
     return 0;
 }
 
+size_t hpx_get_num_workers()
+{
 
+    return hpx::get_os_thread_count();
+}
 
+size_t hpx_get_worker_id()
+{
 
+    return hpx::get_worker_thread_num();
+}
 
+void hpx_foreach(void (*)(void*, size_t, size_t, size_t),
+                          void*, size_t, size_t, size_t)
+{
 
-
-
+}
 
 
 
