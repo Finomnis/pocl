@@ -33,15 +33,7 @@
 #define WORDS_BIGENDIAN 0
 #endif
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 GEN_PROTOTYPES (hpx)
 GEN_PROTOTYPES (basic)
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif /* POCL_HPX_H */

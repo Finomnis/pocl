@@ -23,32 +23,39 @@
    THE SOFTWARE.
 */
 
-#include "pocl-hpx.h"
-#include "install-paths.h"
-#include <assert.h>
-#include <pthread.h>
-#include <string.h>
-#include <stdlib.h>
-#include <errno.h>
-#include <unistd.h>
-#include <stdbool.h>
-#include "pocl_runtime_config.h"
-#include "utlist.h"
-#include "cpuinfo.h"
-#include "topology/pocl_topology.h"
-#include "common.h"
-#include "config.h"
-#include "devices.h"
-#include "pocl_util.h"
-#include "pocl_mem_management.h"
 
-#include "hpx-ext.h"
+extern "C" {
+    #include "pocl-hpx.h"
+    #include "install-paths.h"
+    #include <assert.h>
+    #include <pthread.h>
+    #include <string.h>
+    #include <stdlib.h>
+    #include <errno.h>
+    #include <unistd.h>
+    #include "pocl_runtime_config.h"
+    #include "utlist.h"
+    #include "cpuinfo.h"
+    #include "topology/pocl_topology.h"
+    #include "common.h"
+    #include "config.h"
+    #include "devices.h"
+    #include "pocl_util.h"
+    #include "pocl_mem_management.h"
+}
+
+
+#include <hpx/config.hpp>
+#include <hpx/hpx.hpp>
+#include <vector>
+
 
 #ifdef CUSTOM_BUFFER_ALLOCATOR
 
-#include "bufalloc.h"
-#include <../dev_image.h>
-
+extern "C" {
+    #include "bufalloc.h"
+    #include <../dev_image.h>
+}
 /* Instead of mallocing a buffer size for a region, try to allocate 
    this many times the buffer size to hopefully avoid mallocs for 
    the next buffer allocations.
@@ -80,19 +87,6 @@
 #define THREAD_COUNT_ENV "POCL_MAX_PTHREAD_COUNT"
 
 typedef struct thread_arguments thread_arguments;
-/*
-struct thread_arguments_old 
-{
-  void *data;
-  cl_kernel kernel;
-  unsigned device;
-  struct pocl_context pc;
-  int last_gid_x; 
-  pocl_workgroup workgroup;
-  struct pocl_argument *kernel_args;
-  thread_arguments *volatile next;
-};
-*/
 
 struct thread_arguments
 {
@@ -105,7 +99,7 @@ struct thread_arguments
     // one set of arguments per thread. (arguments is void**)
     struct pocl_argument *kernel_args;
     void*** wg_arguments;
-    bool* initialized;
+    char* initialized;
     cl_kernel kernel;
     unsigned int device;
 };
@@ -186,8 +180,6 @@ pocl_hpx_init (cl_device_id device, const char* parameters)
 {
   struct data *d; 
   static mem_regions_management* mrm = NULL;
-  static int global_mem_id;
-  int i;
 
   // TODO: this checks if the device was already initialized previously.
   // Should we instead have a separate bool field in device, or do the
@@ -204,7 +196,7 @@ pocl_hpx_init (cl_device_id device, const char* parameters)
 #ifdef CUSTOM_BUFFER_ALLOCATOR  
   if (mrm == NULL)
     {
-      mrm = malloc (sizeof (mem_regions_management));
+      mrm = (mem_regions_management*) malloc (sizeof (mem_regions_management));
       BA_INIT_LOCK (mrm->mem_regions_lock);
       mrm->mem_regions = NULL;
     }
@@ -296,7 +288,7 @@ allocate_aligned_buffer (struct data* d, void **memptr, size_t alignment, size_t
          Allocate a larger chunk to avoid allocation overheads
          later on. */
       size_t region_size = 
-        max(min(size + ADDITIONAL_ALLOCATION_MAX_MB * 1024 * 1024, 
+        std::max(std::min(size + ADDITIONAL_ALLOCATION_MAX_MB * 1024 * 1024, 
                 size * ALLOCATION_MULTIPLE), size);
 
       assert (region_size >= size);
@@ -512,7 +504,7 @@ pocl_hpx_map_mem (void *data, void *buf_ptr,
 {
   /* All global pointers of the hpx/CPU device are in 
      the host address space already, and up to date. */     
-  return buf_ptr + offset;
+  return (char*)buf_ptr + offset;
 }
 
 #define FALLBACK_MAX_THREAD_COUNT 8
@@ -540,20 +532,20 @@ pocl_hpx_run
 (void* data,
  _cl_command_node* cmd)
 {
-    unsigned int device;
+    unsigned int device = 0;
     cl_device_id device_ptr;
     cl_kernel kernel = cmd->command.run.kernel;
-    size_t num_hpx_workers = hpx_get_num_workers();
+    size_t num_hpx_workers = hpx::get_os_thread_count();
 
     // initialize shared arrays
-    struct pocl_context* pc_local[num_hpx_workers];
-    void** wg_arguments[num_hpx_workers];
-    bool initialized[num_hpx_workers];
+    std::vector<pocl_context *> pc_local(num_hpx_workers);
+    std::vector<void**> wg_arguments(num_hpx_workers);
+    std::vector<char> initialized(num_hpx_workers);
     for(size_t i = 0; i < num_hpx_workers; i++)
     {
         pc_local[i] = NULL;
         wg_arguments[i] = NULL;
-        initialized[i] = false;
+        initialized[i] = 0;
     }
 
     /* Find which device number within the context corresponds
@@ -576,16 +568,32 @@ pocl_hpx_run
     ta.workgroup = cmd->command.run.wg;
     ta.kernel_args = cmd->command.run.arguments;
     ta.kernel = cmd->command.run.kernel;
-    ta.pc_local = pc_local;
-    ta.wg_arguments = wg_arguments;
-    ta.initialized = initialized;
+    ta.pc_local = pc_local.data();
+    ta.wg_arguments = wg_arguments.data();
+    ta.initialized = initialized.data();
 
     // run kernels
+    /*
     hpx_foreach(workgroup_thread, &ta,
                                   ta.pc_global->num_groups[0],
                                   ta.pc_global->num_groups[1],
                                   ta.pc_global->num_groups[2]); 
-    
+    */
+    size_t dim_x = ta.pc_global->num_groups[0];
+    size_t dim_y = ta.pc_global->num_groups[1];
+    size_t dim_z = ta.pc_global->num_groups[2];
+    for(size_t z = 0; z < dim_z; z++)
+    {
+        for(size_t y = 0; y < dim_y; y++)
+        {
+            for(size_t x = 0; x < dim_x; x++)
+            {
+                workgroup_thread(&ta, x, y, z);
+            }
+        }
+    }
+
+ 
     // cleanup thread_arguments
     for(size_t i = 0; i < num_hpx_workers; i++)
     {
@@ -625,7 +633,7 @@ void workgroup_thread (void* p, size_t gid_x, size_t gid_y, size_t gid_z)
     struct thread_arguments *ta = (struct thread_arguments *) p;
 
     // get the cpu core id
-    size_t hpx_worker_id = hpx_get_worker_id();
+    size_t hpx_worker_id = hpx::get_worker_thread_num();
 
     // initialize arguments if necessary.
     // every core has its own local copy of the input arguments
@@ -636,13 +644,13 @@ void workgroup_thread (void* p, size_t gid_x, size_t gid_y, size_t gid_z)
         size_t arguments_len = ta->kernel->num_args + ta->kernel->num_locals;
 
         // allocate local worker struct
-        ta->wg_arguments[hpx_worker_id] = malloc( 2 * arguments_len
-                                                    * sizeof(void*) );
+        ta->wg_arguments[hpx_worker_id] = (void**) malloc( 2 * arguments_len
+                                                             * sizeof(void*) );
 
         // todo: initialize local thread arguments  
         {
             void** arguments = ta->wg_arguments[hpx_worker_id];
-            void* arguments_ind = (void*)(arguments + arguments_len);
+            void** arguments_ind = arguments + arguments_len;
             cl_kernel kernel = ta->kernel;
             struct pocl_argument *al;  
             for (int i = 0; i < kernel->num_args; ++i)
@@ -707,7 +715,8 @@ void workgroup_thread (void* p, size_t gid_x, size_t gid_y, size_t gid_z)
         }
         
         // initialize pocl context
-        ta->pc_local[hpx_worker_id] = malloc(sizeof(struct pocl_context));
+        ta->pc_local[hpx_worker_id] = (struct pocl_context *)
+                                            malloc(sizeof(struct pocl_context));
         *(ta->pc_local[hpx_worker_id]) = *(ta->pc_global);
 
         // set initialized flag
