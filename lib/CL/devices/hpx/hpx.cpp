@@ -584,7 +584,7 @@ pocl_hpx_run
     {
         for(size_t y = 0; y < dim_y; y++)
         {
-            hpx::parallel::for_each(hpx::parallel::par,
+            hpx::parallel::for_each(hpx::parallel::par(num_hpx_workers * 10),
                                     boost::counting_iterator<size_t>(0),
                                     boost::counting_iterator<size_t>(dim_x),
             [&y, &z, &ta] (size_t x)
