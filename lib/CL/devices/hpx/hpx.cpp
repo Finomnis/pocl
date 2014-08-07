@@ -27,12 +27,6 @@
 extern "C" {
     #include "pocl-hpx.h"
     #include "install-paths.h"
-    #include <assert.h>
-    #include <pthread.h>
-    #include <string.h>
-    #include <stdlib.h>
-    #include <errno.h>
-    #include <unistd.h>
     #include "pocl_runtime_config.h"
     #include "utlist.h"
     #include "cpuinfo.h"
@@ -47,8 +41,12 @@ extern "C" {
 
 #include <hpx/config.hpp>
 #include <hpx/hpx.hpp>
-#include <vector>
+#include <hpx/parallel/algorithm.hpp>
 
+#include <boost/iterator/counting_iterator.hpp>
+
+#include <vector>
+#include <cassert>
 
 #ifdef CUSTOM_BUFFER_ALLOCATOR
 
@@ -559,7 +557,7 @@ pocl_hpx_run
             break;
         }
     }
-
+ 
     // initialize thread_arguments 
     struct thread_arguments ta;
     ta.data = data;
@@ -586,10 +584,13 @@ pocl_hpx_run
     {
         for(size_t y = 0; y < dim_y; y++)
         {
-            for(size_t x = 0; x < dim_x; x++)
+            hpx::parallel::for_each(hpx::parallel::par,
+                                    boost::counting_iterator<size_t>(0),
+                                    boost::counting_iterator<size_t>(dim_x),
+            [&y, &z, &ta] (size_t x)
             {
                 workgroup_thread(&ta, x, y, z);
-            }
+            });
         }
     }
 
@@ -638,8 +639,11 @@ void workgroup_thread (void* p, size_t gid_x, size_t gid_y, size_t gid_z)
     // initialize arguments if necessary.
     // every core has its own local copy of the input arguments
     // to avoid crossing numa-domains.
-    if(!ta->initialized[hpx_worker_id])
+    if(ta->initialized[hpx_worker_id] != 1)
     {
+        // set initialized flag
+        ta->initialized[hpx_worker_id] = 1;
+
         // get number of thread arguments
         size_t arguments_len = ta->kernel->num_args + ta->kernel->num_locals;
 
@@ -719,8 +723,6 @@ void workgroup_thread (void* p, size_t gid_x, size_t gid_y, size_t gid_z)
                                             malloc(sizeof(struct pocl_context));
         *(ta->pc_local[hpx_worker_id]) = *(ta->pc_global);
 
-        // set initialized flag
-        ta->initialized[hpx_worker_id] = true;
     } 
 
     // set current group id
@@ -735,203 +737,4 @@ void workgroup_thread (void* p, size_t gid_x, size_t gid_y, size_t gid_z)
 
 }
 
-/*
-void
-pocl_hpx_run_old 
-(void *data, 
- _cl_command_node* cmd)
-{
-  struct data *d;
-  int error;
-  char workgroup_string[WORKGROUP_STRING_LENGTH];
-  unsigned device;
-  cl_device_id device_ptr;
-  unsigned i;
-  cl_kernel kernel = cmd->command.run.kernel;
-  struct pocl_context *pc = &cmd->command.run.pc;
-  struct thread_arguments *arguments;
-  static int max_threads = 0; // this needs to be asked only once
 
-  d = (struct data *) data;
-
-  // Find which device number within the context correspond
-  // to current device. 
-  for (i = 0; i < kernel->context->num_devices; ++i)
-    {
-      if (kernel->context->devices[i]->data == data)
-        {
-          device = i;
-          device_ptr = kernel->context->devices[i];
-          break;
-        }
-    }
-
-
-  int num_groups_x = pc->num_groups[0];
-  // TODO: distributing the work groups in the x dimension is not always the
-  // best option. This assumes x dimension has enough work groups to utilize
-  // all the threads. 
-  if (max_threads == 0)
-    max_threads = get_max_thread_count(device_ptr);
-
-  int num_threads = min(max_threads, num_groups_x);
-  hpx_thread_t *threads = (hpx_thread_t*) malloc (sizeof (hpx_thread_t)*num_threads);
-  
-  int wgs_per_thread = num_groups_x / num_threads;
-  // In case the work group count is not divisible by the
-  // number of threads, we have to execute the remaining
-  // workgroups in one of the threads.
-  // TODO: This is inefficient; it is better to round up when
-  // calculating wgs_per_thread 
-  int leftover_wgs = num_groups_x - (num_threads*wgs_per_thread);
-
-#ifdef DEBUG_MT    
-  printf("### creating %d work group threads\n", num_threads);
-  printf("### wgs per thread==%d leftover wgs==%d\n", wgs_per_thread, leftover_wgs);
-#endif
-  
-  int first_gid_x = 0;
-  int last_gid_x = wgs_per_thread - 1;
-  for (i = 0; i < num_threads; 
-       ++i, first_gid_x += wgs_per_thread, last_gid_x += wgs_per_thread) {
-
-    if (i + 1 == num_threads) last_gid_x += leftover_wgs;
-
-#ifdef DEBUG_MT       
-    printf("### creating wg thread: first_gid_x==%d, last_gid_x==%d\n",
-           first_gid_x, last_gid_x);
-#endif
-    arguments = new_thread_arguments();
-    arguments->data = data;
-    arguments->kernel = kernel;
-    arguments->device = device;
-    arguments->pc = *pc;
-    arguments->pc.group_id[0] = first_gid_x;
-    arguments->workgroup = cmd->command.run.wg;
-    arguments->last_gid_x = last_gid_x;
-    arguments->kernel_args = cmd->command.run.arguments;
-
-    // TODO: pool of worker threads to avoid syscalls here
-    error = hpx_thread_create (&threads[i],
-                               workgroup_thread,
-                               arguments);
-    assert(!error);
-  }
-
-  hpx_threads_join(threads, num_threads);
-
-  free(threads);
-}
-*/
-
-/*
-void *
-workgroup_thread_old (void *p)
-{
-  struct thread_arguments *ta = (struct thread_arguments *) p;
-  size_t arguments_len = ta->kernel->num_args + ta->kernel->num_locals;
-  void *arguments[2*arguments_len];
-  void arguments_ind = arguments + arguments_len;
-  struct pocl_argument *al;  
-  unsigned i = 0;
-
-  // TODO: refactor this to share code with basic.c 
-  //
-  // To function 
-  // void setup_kernel_arg_array(void **arguments, cl_kernel kernel)
-  // or similar
-  
-  cl_kernel kernel = ta->kernel;
-  for (i = 0; i < kernel->num_args; ++i)
-    {
-      al = &(ta->kernel_args[i]);
-      if (kernel->arg_info[i].is_local)
-        {
-          arguments[i] = &arguments_ind[i];
-          *(void **)(arguments[i]) = pocl_hpx_malloc(ta->data, 0, al->size, NULL);
-        }
-      else if (kernel->arg_info[i].type == POCL_ARG_TYPE_POINTER)
-      {
-        // It's legal to pass a NULL pointer to clSetKernelArguments. In 
-        // that case we must pass the same NULL forward to the kernel.
-        // Otherwise, the user must have created a buffer with per device
-        // pointers stored in the cl_mem.
-        if (al->value == NULL) 
-          {
-            arguments[i] = &arguments_ind[i];
-            *(void **)arguments[i] = NULL;
-          }
-        else
-          {
-            arguments[i] = 
-              &((*(cl_mem *)(al->value))->device_ptrs[ta->device].mem_ptr);
-          }
-      }
-      else if (kernel->arg_info[i].type == POCL_ARG_TYPE_IMAGE)
-        {
-          dev_image_t di;
-          fill_dev_image_t(&di, al, ta->device);
-          void* devptr = pocl_hpx_malloc(ta->data, 0, sizeof(dev_image_t), NULL);
-          arguments[i] = &arguments_ind[i];
-          *(void **)(arguments[i]) = devptr;       
-          pocl_hpx_write (ta->data, &di, devptr, sizeof(dev_image_t));
-        }
-      else if (kernel->arg_info[i].type == POCL_ARG_TYPE_SAMPLER)
-        {
-          dev_sampler_t ds;
-          
-          arguments[i] = &arguments_ind[i];
-          *(void **)(arguments[i]) = pocl_hpx_malloc
-            (ta->data, 0, sizeof(dev_sampler_t), NULL);
-          pocl_hpx_write (ta->data, &ds, *(void**)arguments[i],
-                              sizeof(dev_sampler_t));
-        }
-      else
-        arguments[i] = al->value;
-    }
-
-  // Allocate the automatic local buffers which are implemented as implicit
-  // extra arguments at the end of the kernel argument list.
-  for (i = kernel->num_args;
-       i < kernel->num_args + kernel->num_locals;
-       ++i)
-    {
-      al = &(ta->kernel_args[i]);
-      arguments[i] = &arguments_ind[i];
-      *(void **)(arguments[i]) = pocl_hpx_malloc (ta->data, 0, al->size,
-                                                      NULL);
-    }
-
-  int first_gid_x = ta->pc.group_id[0];
-  unsigned gid_z, gid_y, gid_x;
-  for (gid_z = 0; gid_z < ta->pc.num_groups[2]; ++gid_z)
-    {
-      for (gid_y = 0; gid_y < ta->pc.num_groups[1]; ++gid_y)
-        {
-          for (gid_x = first_gid_x; gid_x <= ta->last_gid_x; ++gid_x)
-            {
-              ta->pc.group_id[0] = gid_x;
-              ta->pc.group_id[1] = gid_y;
-              ta->pc.group_id[2] = gid_z;
-              ta->workgroup (arguments, &(ta->pc));
-            }
-        }
-    }
-
-  for (i = 0; i < kernel->num_args; ++i)
-    {
-      if (kernel->arg_info[i].is_local )
-        {
-          pocl_hpx_free (ta->data, 0, *(void **)(arguments[i]));
-        }
-    }
-  for (i = kernel->num_args;
-       i < kernel->num_args + kernel->num_locals;
-       ++i)
-    {
-      pocl_hpx_free (ta->data, 0, *(void **)(arguments[i]));
-    }
-  free_thread_arguments (ta);
-
-  return NULL;
-}*/
