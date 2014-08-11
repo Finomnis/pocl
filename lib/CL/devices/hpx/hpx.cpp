@@ -42,6 +42,7 @@ extern "C" {
 #include <hpx/config.hpp>
 #include <hpx/hpx.hpp>
 #include <hpx/parallel/algorithm.hpp>
+#include <hpx/include/thread_executors.hpp>
 
 #include <boost/iterator/counting_iterator.hpp>
 
@@ -534,6 +535,10 @@ pocl_hpx_run
     cl_device_id device_ptr;
     cl_kernel kernel = cmd->command.run.kernel;
     size_t num_hpx_workers = hpx::get_os_thread_count();
+    static hpx::threads::executors::default_executor kernel_executor(
+                                          hpx::threads::thread_priority_low,
+                                          hpx::threads::thread_stacksize_large);
+
 
     // initialize shared arrays
     std::vector<pocl_context *> pc_local(num_hpx_workers);
@@ -584,7 +589,7 @@ pocl_hpx_run
     {
         for(size_t y = 0; y < dim_y; y++)
         {
-            hpx::parallel::for_each(hpx::parallel::par(num_hpx_workers * 10),
+            hpx::parallel::for_each(hpx::parallel::par(kernel_executor),
                                     boost::counting_iterator<size_t>(0),
                                     boost::counting_iterator<size_t>(dim_x),
             [&y, &z, &ta] (size_t x)
@@ -641,6 +646,7 @@ void workgroup_thread (void* p, size_t gid_x, size_t gid_y, size_t gid_z)
     // to avoid crossing numa-domains.
     if(ta->initialized[hpx_worker_id] != 1)
     {
+
         // set initialized flag
         ta->initialized[hpx_worker_id] = 1;
 
