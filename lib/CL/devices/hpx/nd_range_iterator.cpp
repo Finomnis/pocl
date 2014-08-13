@@ -35,6 +35,17 @@ nd_pos::nd_pos(size_t x_,
       size_total(size_x_ * size_y_ * size_z_)
 {}
 
+nd_range_iterator
+nd_range_iterator::begin(size_t size_x, size_t size_y, size_t size_z)
+{
+    return nd_range_iterator(nd_pos(0, 0, 0, size_x, size_y, size_z));
+}
+
+nd_range_iterator
+nd_range_iterator::end(size_t size_x, size_t size_y, size_t size_z)
+{
+    return nd_range_iterator(nd_pos(0, 0, size_z, size_x, size_y, size_z));
+}
 
 nd_range_iterator::nd_range_iterator()
     : pos(0,0,0,0,0,0)

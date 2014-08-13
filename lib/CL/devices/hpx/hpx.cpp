@@ -49,6 +49,8 @@ extern "C" {
 #include <vector>
 #include <cassert>
 
+#include "nd_range_iterator.hpp"
+
 #ifdef CUSTOM_BUFFER_ALLOCATOR
 
 extern "C" {
@@ -124,7 +126,7 @@ struct data {
 
 
 static int get_max_thread_count();
-static void workgroup_thread (void* p, size_t gid_x, size_t gid_y, size_t gid_z);
+static void workgroup_thread (void* p, nd_pos const& gid);
 
 void
 pocl_hpx_init_device_ops(struct pocl_device_ops *ops)
@@ -585,19 +587,15 @@ pocl_hpx_run
     size_t dim_x = ta.pc_global->num_groups[0];
     size_t dim_y = ta.pc_global->num_groups[1];
     size_t dim_z = ta.pc_global->num_groups[2];
-    for(size_t z = 0; z < dim_z; z++)
-    {
-        for(size_t y = 0; y < dim_y; y++)
-        {
-            hpx::parallel::for_each(hpx::parallel::par(kernel_executor),
-                                    boost::counting_iterator<size_t>(0),
-                                    boost::counting_iterator<size_t>(dim_x),
-            [&y, &z, &ta] (size_t x)
+    
+    hpx::parallel::for_each(hpx::parallel::par(kernel_executor),
+                            nd_range_iterator::begin(dim_x, dim_y, dim_z),
+                            nd_range_iterator::end(dim_x, dim_y, dim_z),
+            [&ta] (nd_pos const& gid)
             {
-                workgroup_thread(&ta, x, y, z);
+                workgroup_thread(&ta, gid);
             });
-        }
-    }
+        
 
  
     // cleanup thread_arguments
@@ -633,7 +631,7 @@ pocl_hpx_run
     }
 }
 
-void workgroup_thread (void* p, size_t gid_x, size_t gid_y, size_t gid_z)
+void workgroup_thread (void* p, nd_pos const& gid)
 {
     // parse inputs
     struct thread_arguments *ta = (struct thread_arguments *) p;
@@ -657,7 +655,7 @@ void workgroup_thread (void* p, size_t gid_x, size_t gid_y, size_t gid_z)
         ta->wg_arguments[hpx_worker_id] = (void**) malloc( 2 * arguments_len
                                                              * sizeof(void*) );
 
-        // todo: initialize local thread arguments  
+        // initialize local thread arguments  
         {
             void** arguments = ta->wg_arguments[hpx_worker_id];
             void** arguments_ind = arguments + arguments_len;
@@ -733,9 +731,9 @@ void workgroup_thread (void* p, size_t gid_x, size_t gid_y, size_t gid_z)
 
     // set current group id
     struct pocl_context *pc = ta->pc_local[hpx_worker_id];
-    pc->group_id[0] = gid_x;
-    pc->group_id[1] = gid_y;
-    pc->group_id[2] = gid_z;
+    pc->group_id[0] = gid.x;
+    pc->group_id[1] = gid.y;
+    pc->group_id[2] = gid.z;
 
     // do work.
     // syntax: workgroup(void**, pocl_context*)

@@ -49,6 +49,9 @@ class nd_range_iterator
         nd_range_iterator(value_type&);
         nd_range_iterator(value_type&&);
 
+        static nd_range_iterator begin(size_t, size_t, size_t);
+        static nd_range_iterator end(size_t, size_t, size_t);
+
     private:
         friend class boost::iterator_core_access;
         
