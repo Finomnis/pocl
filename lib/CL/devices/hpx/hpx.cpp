@@ -105,10 +105,12 @@ struct thread_arguments
     unsigned int device;
 };
 
+#ifdef CUSTOM_BUFFER_ALLOCATOR  
 typedef struct _mem_regions_management{
   ba_lock_t mem_regions_lock;
   struct memory_region *mem_regions;
 } mem_regions_management;
+#endif
 
 struct data {
   /* Currently loaded kernel. */
@@ -180,7 +182,9 @@ void
 pocl_hpx_init (cl_device_id device, const char* parameters)
 {
   struct data *d; 
+#ifdef CUSTOM_BUFFER_ALLOCATOR  
   static mem_regions_management* mrm = NULL;
+#endif
 
   // TODO: this checks if the device was already initialized previously.
   // Should we instead have a separate bool field in device, or do the
