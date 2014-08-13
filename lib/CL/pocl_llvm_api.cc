@@ -399,7 +399,9 @@ int pocl_llvm_get_kernel_arg_metadata(const char* kernel_name,
 
     // argument num
     unsigned arg_num = meta_node->getNumOperands();
-    assert(((arg_num-1) == kernel->num_args) && "Kernel argument count doesn't fit metadata arg count");
+#ifndef NDEBUG
+    int has_meta_for_every_arg = ((arg_num-1) == kernel->num_args);
+#endif
 
     llvm::MDString *meta_name_node = llvm::cast<MDString>(meta_node->getOperand(0));
     std::string meta_name = meta_name_node->getString().str();
@@ -409,6 +411,7 @@ int pocl_llvm_get_kernel_arg_metadata(const char* kernel_name,
       struct pocl_argument_info* current_arg = &kernel->arg_info[j-1];
 
       if (isa<ConstantInt>(meta_arg_value) && meta_name=="kernel_arg_addr_space") {
+        assert(has_meta_for_every_arg && "kernel_arg_addr_space meta incomplete");
         kernel->has_arg_metadata |= POCL_HAS_KERNEL_ARG_ADDRESS_QUALIFIER;
         //std::cout << "is ConstantInt /  kernel_arg_addr_space" << std::endl;
         llvm::ConstantInt *m = llvm::cast<ConstantInt>(meta_arg_value);
@@ -444,6 +447,7 @@ int pocl_llvm_get_kernel_arg_metadata(const char* kernel_name,
         std::string val = m->getString().str();
         //std::cout << "with value: " << val << std::endl;
         if (meta_name == "kernel_arg_access_qual") {
+          assert(has_meta_for_every_arg && "kernel_arg_access_qual meta incomplete");
           kernel->has_arg_metadata |= POCL_HAS_KERNEL_ARG_ACCESS_QUALIFIER;
           if (val == "read_write")
             current_arg->access_qualifier = CL_KERNEL_ARG_ACCESS_READ_WRITE;
@@ -456,12 +460,14 @@ int pocl_llvm_get_kernel_arg_metadata(const char* kernel_name,
           else
             std::cout << "UNKNOWN kernel_arg_access_qual value: " << val << std::endl;
         } else if (meta_name == "kernel_arg_type") {
+          assert(has_meta_for_every_arg && "kernel_arg_type meta incomplete");
           kernel->has_arg_metadata |= POCL_HAS_KERNEL_ARG_TYPE_NAME;
           current_arg->type_name = new char[val.size() + 1];
           std::strcpy(current_arg->type_name, val.c_str());
         } else if (meta_name == "kernel_arg_base_type") {
           // may or may not be present even in SPIR
         } else if (meta_name == "kernel_arg_type_qual") {
+          assert(has_meta_for_every_arg && "kernel_arg_type_qual meta incomplete");
           kernel->has_arg_metadata |= POCL_HAS_KERNEL_ARG_TYPE_QUALIFIER;
           current_arg->type_qualifier = 0;
           if (val.find("const") != std::string::npos)
@@ -471,13 +477,14 @@ int pocl_llvm_get_kernel_arg_metadata(const char* kernel_name,
           if (val.find("volatile") != std::string::npos)
             current_arg->type_qualifier |= CL_KERNEL_ARG_TYPE_VOLATILE;
         } else if (meta_name == "kernel_arg_name") {
+          assert(has_meta_for_every_arg && "kernel_arg_name meta incomplete");
           kernel->has_arg_metadata |= POCL_HAS_KERNEL_ARG_NAME;
           current_arg->name = new char[val.size() + 1];
           std::strcpy(current_arg->name, val.c_str());
         } else
           std::cout << "UNKNOWN opencl metadata name: " << meta_name << std::endl;
       }
-      else
+      else if (meta_name != "reqd_work_group_size")
         std::cout << "UNKNOWN opencl metadata class for: " << meta_name << std::endl;
 
     }
@@ -768,7 +775,6 @@ static llvm::TargetOptions GetTargetOptions() {
 #endif
   return Options;
 }
-
 // Returns the TargetMachine instance or zero if no triple is provided.
 static TargetMachine* GetTargetMachine(cl_device_id device,
  const std::vector<std::string>& MAttrs=std::vector<std::string>()) {
@@ -777,13 +783,16 @@ static TargetMachine* GetTargetMachine(cl_device_id device,
   Triple TheTriple(device->llvm_target_triplet);
   std::string MCPU =  device->llvm_cpu ? device->llvm_cpu : "";
   const Target *TheTarget = 
-    TargetRegistry::lookupTarget("" /*MArch*/, TheTriple,
-                                 Error);
-  // Some modules don't specify a triple, and this is okay.
-  if (!TheTarget) {
+    TargetRegistry::lookupTarget("", TheTriple, Error);
+  
+  // In LLVM 3.4 and earlier, the target registry falls back to 
+  // the cpp backend in case a proper match was not found. In 
+  // that case simply do not use target info in the compilation 
+  // because it can be an off-tree target not registered at
+  // this point (read: TCE).
+  if (!TheTarget || TheTarget->getName() == std::string("cpp")) {
     return 0;
   }
-
   // Package up features to be passed to target/subtarget
   std::string FeaturesStr;
   if (MAttrs.size()) {
@@ -864,15 +873,17 @@ static PassManager& kernel_compiler_passes
   TargetMachine *Machine = GetTargetMachine(device);
   // Add internal analysis passes from the target machine.
 #ifndef LLVM_3_2
-  Machine->addAnalysisPasses(*Passes);
+  if (Machine != NULL)
+    Machine->addAnalysisPasses(*Passes);
 #endif
 
-  if (module_data_layout != "")
-    #if (defined LLVM_3_2 or defined LLVM_3_3 or defined LLVM_3_4)
+  if (module_data_layout != "") {
+#if (defined LLVM_3_2 or defined LLVM_3_3 or defined LLVM_3_4)
     Passes->add(new DataLayout(module_data_layout));
-    #else
+#else
     Passes->add(new DataLayoutPass(DataLayout(module_data_layout)));
-    #endif
+#endif
+  }
 
   /* Disables automated generation of libcalls from code patterns. 
      TCE doesn't have a runtime linker which could link the libs later on.
@@ -901,7 +912,7 @@ static PassManager& kernel_compiler_passes
      restore code (PHIs need to be at the beginning of the BB and so one cannot
      context restore them with non-PHI code if the value is needed in another PHI). */
 
-  std::vector<std::string> passes;
+  std::vector<std::string> passes;  
   passes.push_back("workitem-handler-chooser");
   passes.push_back("mem2reg");
   passes.push_back("domtree");
@@ -923,10 +934,16 @@ static PassManager& kernel_compiler_passes
   passes.push_back("isolate-regions");
   passes.push_back("wi-aa");
   passes.push_back("workitemrepl");
+  //passes.push_back("print-module");
   passes.push_back("workitemloops");
   passes.push_back("allocastoentry");
   passes.push_back("workgroup");
   passes.push_back("target-address-spaces");
+  // Later passes might get confused (and expose possible bugs in them) due to
+  // UNREACHABLE blocks left by repl. So let's clean up the CFG before running the
+  // standard LLVM optimizations.
+  passes.push_back("simplifycfg");
+  //passes.push_back("print-module");
 
   /* This is a beginning of the handling of the fine-tuning parameters.
    * TODO: POCL_KERNEL_COMPILER_OPT_SWITCH
@@ -984,7 +1001,15 @@ static PassManager& kernel_compiler_passes
   else if (wi_vectorizer) 
     {
       /* The legacy repl based WI autovectorizer. Deprecated but 
-         for still needed by some legacy TTA machines. */
+         still needed by some legacy TCE research machines. A known problem
+         is that it traverses instruction uses incorrectly, not calling getUser() 
+         like LLVM 3.5 API requires. 
+
+         All in all it is an unmaintable hack on top of an old BBVectorizer that was 
+         added for a research prototype core. We should move on towards using the
+         loop vectorizer as the main autovectorizer for a cleaner pass chain.  */
+      std::cerr << "pocl warning: wi-vectorize is deprecated and will be removed "
+                << "in pocl 0.11. It might not work correctly with LLVM 3.5.\n";
       passes.push_back("STANDARD_OPTS");
       passes.push_back("wi-vectorize");
       llvm::cl::Option *O;
@@ -1107,7 +1132,7 @@ kernel_library
 #ifdef LLVM_3_2 
       else if (triple.getArch() == Triple::cellspu) 
         {
-          kernellib += "cellspu";
+          kernellib += "cellspu"; 
         }
 #endif
       else 
@@ -1304,18 +1329,21 @@ pocl_llvm_codegen(cl_kernel kernel,
     llvm::PassManager PM;
     llvm::TargetLibraryInfo *TLI = new TargetLibraryInfo(triple);
     PM.add(TLI);
+    if (target != NULL) {
 #if defined LLVM_3_2
-    PM.add(new TargetTransformInfo(target->getScalarTargetTransformInfo(),
-                                   target->getVectorTargetTransformInfo()));
+      PM.add(new TargetTransformInfo(target->getScalarTargetTransformInfo(),
+                                     target->getVectorTargetTransformInfo()));
 #else
-    target->addAnalysisPasses(PM);
+      target->addAnalysisPasses(PM);
 #endif
+    }
 
     // TODO: get DataLayout from the 'device'
 #if defined LLVM_3_2 || defined LLVM_3_3 || defined LLVM_3_4
-    const DataLayout *TD;
-    TD = target->getDataLayout();
-    if (TD)
+    const DataLayout *TD = NULL;
+    if (target != NULL)
+      TD = target->getDataLayout();
+    if (TD != NULL)
         PM.add(new DataLayout(*TD));
     else
         PM.add(new DataLayout(input));
