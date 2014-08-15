@@ -187,7 +187,7 @@ pocl_pthread_init_device_infos(struct _cl_device_id* dev)
 {
   pocl_basic_init_device_infos(dev);
 
-  dev->type = CL_DEVICE_TYPE_CPU | CL_DEVICE_TYPE_DEFAULT;
+  dev->type = CL_DEVICE_TYPE_CPU;
   /* This could be SIZE_T_MAX, but setting it to INT_MAX should suffice, */
   /* and may avoid errors in user code that uses int instead of size_t */
   dev->max_work_item_sizes[0] = 1024;
@@ -260,8 +260,8 @@ pocl_pthread_init (cl_device_id device, const char* parameters)
 
   device->extensions = DOUBLE_EXT HALF_EXT "cl_khr_byte_addressable_store";
 
-  pocl_cpuinfo_detect_device_info(device);
   pocl_topology_detect_device_info(device);
+  pocl_cpuinfo_detect_device_info(device);
 
   if(!strcmp(device->llvm_cpu, "(unknown)"))
     device->llvm_cpu = NULL;
@@ -643,14 +643,14 @@ pocl_pthread_map_mem (void *data, void *buf_ptr,
 {
   /* All global pointers of the pthread/CPU device are in 
      the host address space already, and up to date. */     
-  return buf_ptr + offset;
+  return (char*)buf_ptr + offset;
 }
 
 void *
 workgroup_thread (void *p)
 {
   struct thread_arguments *ta = (struct thread_arguments *) p;
-  void *arguments[ta->kernel->num_args + ta->kernel->num_locals];
+  void **arguments = (void**)alloca((ta->kernel->num_args + ta->kernel->num_locals)*sizeof(void*));
   struct pocl_argument *al;  
   unsigned i = 0;
 
