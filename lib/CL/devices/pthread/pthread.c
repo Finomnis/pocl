@@ -175,9 +175,9 @@ unsigned int
 pocl_pthread_probe(struct pocl_device_ops *ops)
 {
   int env_count = pocl_device_get_env_count(ops->device_name);
-  /* Env was not specified, default behavior was to use 1 pthread device */
+  /* Env was not specified, default behavior was to use 0 pthread devices */
   if(env_count < 0)
-    return 1;
+    return 0;
 
   return env_count;
 }
