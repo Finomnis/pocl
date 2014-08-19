@@ -144,6 +144,11 @@ endif
 libpocl_la_LIBADD = devices/libpocl-devices.la
 libpocl_la_LIBADD += ${LTDL_LIBS}
 
+if BUILD_HPX
+SUBDIRS += hpx-threads
+libpocl_la_LIBADD += hpx-threads/libhpxthread.la
+endif
+
 if BUILD_SPU
 libpocl_la_LIBADD += -lspe2
 endif

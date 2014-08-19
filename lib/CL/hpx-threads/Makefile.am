@@ -25,7 +25,7 @@
 
 noinst_LTLIBRARIES = libhpxthread.la
 
-libhpxthread_la_SOURCES = mutex.cpp	
+libhpxthread_la_SOURCES = hpx_c_spinlock.h hpx_c_spinlock.cpp
 
 libhpxthread_la_CPPFLAGS = @HPX_INCLUDE_FLAGS@
 libhpxthread_la_LDFLAGS = @HPX_LINK_FLAGS@ @HPX_LIBS@

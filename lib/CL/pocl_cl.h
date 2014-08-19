@@ -29,7 +29,12 @@
 #include <assert.h>
 #include <stdio.h>
 #include <ltdl.h>
-#include <pthread.h>
+
+#if defined(BUILD_HPX)
+    #include "hpx-threads/hpx_c_spinlock.h" 
+#else
+    #include <pthread.h>
+#endif
 
 #define CL_USE_DEPRECATED_OPENCL_1_1_APIS
 #ifdef BUILD_ICD
@@ -93,28 +98,38 @@
 #define POCL_ERROR(x) do { if (errcode_ret != NULL) {*errcode_ret = (x); } return NULL; } while (0)
 #define POCL_SUCCESS() do { if (errcode_ret != NULL) {*errcode_ret = CL_SUCCESS; } } while (0)
 
-typedef pthread_mutex_t pocl_lock_t;
-#define POCL_LOCK_INITIALIZER PTHREAD_MUTEX_INITIALIZER
-
 /* Generic functionality for handling different types of 
    OpenCL (host) objects. */
 
-#define POCL_LOCK(__LOCK__){                                        \
-    /*printf("%s(%d): POCL_LOCK\n", __FILE__, __LINE__);*/              \
-    pthread_mutex_lock (&(__LOCK__));                               \
-}
-#define POCL_UNLOCK(__LOCK__){                                      \
-    /*printf("%s(%d): POCL_UNLOCK\n", __FILE__, __LINE__);*/            \
-    pthread_mutex_unlock (&(__LOCK__));                             \
-}
-#define POCL_INIT_LOCK(__LOCK__){                                   \
-    printf("%s(%d): POCL_INIT_LOCK\n", __FILE__, __LINE__);         \
-    pthread_mutex_init (&(__LOCK__), NULL);                         \
-}
-#define POCL_DESTROY_LOCK(__LOCK__){                                \
-    printf("%s(%d): POCL_DESTROY_LOCK\n", __FILE__, __LINE__);      \
-    pthread_mutex_destroy (&(__LOCK__));                            \
-}
+#if defined(BUILD_HPX)
+    typedef struct hpx_c_spinlock pocl_lock_t;
+    #define POCL_LOCK_INITIALIZER { 0 }
+
+    #define POCL_LOCK(__LOCK__){                                        \
+        /*printf("%s(%d): POCL_LOCK\n", __FILE__, __LINE__);*/          \
+        hpx_c_spinlock_lock (&(__LOCK__));                              \
+    }
+    #define POCL_UNLOCK(__LOCK__){                                      \
+        /*printf("%s(%d): POCL_UNLOCK\n", __FILE__, __LINE__);*/        \
+        hpx_c_spinlock_unlock (&(__LOCK__));                            \
+    }
+    #define POCL_INIT_LOCK(__LOCK__){                                   \
+        /*printf("%s(%d): POCL_INIT_LOCK\n", __FILE__, __LINE__);*/     \
+        hpx_c_spinlock_init (&(__LOCK__), NULL);                        \
+    }
+    #define POCL_DESTROY_LOCK(__LOCK__){                                \
+        /*printf("%s(%d): POCL_DESTROY_LOCK\n", __FILE__, __LINE__);*/  \
+        hpx_c_spinlock_destroy (&(__LOCK__));                           \
+    }
+#else
+    typedef pthread_mutex_t pocl_lock_t;
+    #define POCL_LOCK_INITIALIZER PTHREAD_MUTEX_INITIALIZER
+
+    #define POCL_LOCK(__LOCK__)         pthread_mutex_lock (&(__LOCK__))
+    #define POCL_UNLOCK(__LOCK__)       pthread_mutex_unlock (&(__LOCK__))
+    #define POCL_INIT_LOCK(__LOCK__)    pthread_mutex_init (&(__LOCK__), NULL)
+    #define POCL_DESTROY_LOCK(__LOCK__) pthread_mutex_destroy (&(__LOCK__))
+#endif
 
 #define POCL_LOCK_OBJ(__OBJ__) POCL_LOCK((__OBJ__)->pocl_lock)
 #define POCL_UNLOCK_OBJ(__OBJ__) POCL_UNLOCK((__OBJ__)->pocl_lock)
