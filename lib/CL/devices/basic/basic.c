@@ -25,7 +25,6 @@
 #include "basic.h"
 #include "cpuinfo.h"
 #include "topology/pocl_topology.h"
-#include "install-paths.h"
 #include "common.h"
 #include "utlist.h"
 #include "devices.h"
@@ -34,7 +33,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <../dev_image.h>
+#include <dev_image.h>
 #include <sys/time.h>
 
 #define max(a,b) (((a) > (b)) ? (a) : (b))
@@ -240,12 +239,12 @@ pocl_basic_init_device_infos(struct _cl_device_id* dev)
   dev->max_clock_frequency = 0;
   dev->address_bits = POCL_DEVICE_ADDRESS_BITS;
 
-  /* Use the minimum values until we get a more sensible 
+  /* Use the minimum values until we get a more sensible
      upper limit from somewhere. */
   dev->max_read_image_args = dev->max_write_image_args = 128;
   dev->image2d_max_width = dev->image2d_max_height = 8192;
   dev->image3d_max_width = dev->image3d_max_height = dev->image3d_max_depth = 2048;
-  dev->max_samplers = 16;  
+  dev->max_samplers = 16;
   dev->max_constant_args = 8;
 
   dev->max_mem_alloc_size = 0;

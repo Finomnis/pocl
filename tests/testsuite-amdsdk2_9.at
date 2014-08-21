@@ -28,7 +28,7 @@ AT_CLEANUP
 POAT_AMDSDK_SETUP([basicdebug])
 # This tests debugging features by executing a kernel that writes
 # out of bounds of a local array. No point testing it here as the
-# result should be undefined (basic device crashes, pthread device 
+# result should be undefined (basic device crashes, pthread device
 # silently passes). It passes if the kernel's local array size is
 # increased so there is no out of bounds error.
 AT_SKIP_IF(true)

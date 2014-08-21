@@ -27,7 +27,6 @@
 #include "pocl_llvm.h"
 #include "pocl_util.h"
 #include "utlist.h"
-#include "install-paths.h"
 #include <assert.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -294,8 +293,6 @@ POname(clEnqueueNDRangeKernel)(cl_command_queue command_queue,
   POname(clRetainKernel) (kernel);
 
   command_node->command.run.arg_buffer_count = 0;
-  /* Retain all memobjects so they won't get freed before the
-     queued kernel has been executed. */
   for (i = 0; i < kernel->num_args; ++i)
   {
     struct pocl_argument *al = &(kernel->dyn_arguments[i]);
@@ -317,6 +314,8 @@ POname(clEnqueueNDRangeKernel)(cl_command_queue command_queue,
         printf ("### retaining arg %d - the buffer %x of kernel %s\n", i, buf, kernel->function_name);
 #endif
         buf = *(cl_mem *) (al->value);
+        /* Retain all memobjects so they won't get freed before the
+           queued kernel has been executed. */
         if (buf != NULL)
           POname(clRetainMemObject) (buf);
         command_node->command.run.arg_buffers[count] = buf;
