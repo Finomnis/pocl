@@ -26,7 +26,6 @@
 
 extern "C" {
     #include "pocl-hpx.h"
-    #include "install-paths.h"
     #include "pocl_runtime_config.h"
     #include "utlist.h"
     #include "cpuinfo.h"
@@ -56,7 +55,7 @@ extern "C" {
 
 extern "C" {
     #include "bufalloc.h"
-    #include <../dev_image.h>
+    #include <dev_image.h>
 }
 /* Instead of mallocing a buffer size for a region, try to allocate 
    this many times the buffer size to hopefully avoid mallocs for 
