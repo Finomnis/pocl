@@ -39,6 +39,7 @@ typedef std::map<std::size_t, mem_list>::iterator   pool_iterator;
 void*
 mem_pool::allocate(std::size_t size)
 {
+    /*
     // try to find already allocated memory
     pool_iterator it = pool.find(size);
     if(it != pool.end())
@@ -51,14 +52,15 @@ mem_pool::allocate(std::size_t size)
         }
     }
 
+    // remember size of the allocated memory
+    mem_sizes[new_buf] = size;
+    */
     // allocate new iterator
     void* new_buf;
     
     int ret_val = posix_memalign(&new_buf, MAX_EXTENDED_ALIGNMENT, size);
     assert(ret_val == 0);
 
-    // remember size of the allocated memory
-    mem_sizes[new_buf] = size;
 
     return new_buf;
 }
@@ -66,6 +68,7 @@ mem_pool::allocate(std::size_t size)
 void
 mem_pool::release(void* mem)
 {
+    /*
     // get size of memory
     std::map<void*, std::size_t>::iterator mem_size = mem_sizes.find(mem);
     assert(mem_size != mem_sizes.end());
@@ -74,4 +77,6 @@ mem_pool::release(void* mem)
 
     // add to pool
     pool[size].push(mem);
+    */
+    free(mem);
 }
