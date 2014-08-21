@@ -50,6 +50,7 @@ extern "C" {
 #include <cassert>
 
 #include "nd_range_iterator.hpp"
+#include "mem_pool.hpp"
 
 #ifdef CUSTOM_BUFFER_ALLOCATOR
 
@@ -129,6 +130,8 @@ struct data {
 
 static int get_max_thread_count();
 static void workgroup_thread (void* p, nd_pos const& gid);
+
+static std::vector<mem_pool> mempools;
 
 void
 pocl_hpx_init_device_ops(struct pocl_device_ops *ops)
@@ -250,6 +253,9 @@ pocl_hpx_init (cl_device_id device, const char* parameters)
   #ifdef _CL_DISABLE_LONG
   device->has_64bit_long=0;
   #endif
+
+  // initialize kernel mempool
+  mempools.resize(hpx::get_os_thread_count());
 
 }
 
@@ -532,6 +538,7 @@ get_max_thread_count(cl_device_id device)
     return pocl_get_int_option(THREAD_COUNT_ENV, device->max_compute_units * 20);
 }
 
+
 void
 pocl_hpx_run
 (void* data,
@@ -599,8 +606,6 @@ pocl_hpx_run
             {
                 workgroup_thread(&ta, gid);
             });
-        
-
  
     // cleanup thread_arguments
     for(size_t i = 0; i < num_hpx_workers; i++)
@@ -616,14 +621,14 @@ pocl_hpx_run
                     kernel->arg_info[j].type == POCL_ARG_TYPE_IMAGE ||
                     kernel->arg_info[j].type == POCL_ARG_TYPE_SAMPLER)
                 {
-                    pocl_hpx_free (ta.data, 0, *(void **)(ta.wg_arguments[i][j]));
+                    mempools[i].release(*(void **)(ta.wg_arguments[i][j]));
                 }
             }
             for (int j = kernel->num_args;
                  j < kernel->num_args + kernel->num_locals;
                  ++j)
             {
-                pocl_hpx_free (ta.data, 0, *(void **)(ta.wg_arguments[i][j]));
+                mempools[i].release(*(void **)(ta.wg_arguments[i][j]));
             }
              
             // free the allocated void* array
@@ -648,7 +653,7 @@ void workgroup_thread (void* p, nd_pos const& gid)
     // to avoid crossing numa-domains.
     if(ta->initialized[hpx_worker_id] != 1)
     {
-
+        
         // set initialized flag
         ta->initialized[hpx_worker_id] = 1;
 
@@ -671,7 +676,7 @@ void workgroup_thread (void* p, nd_pos const& gid)
                 if (kernel->arg_info[i].is_local)
                   {
                     arguments[i] = &arguments_ind[i];
-                    *(void **)(arguments[i]) = pocl_hpx_malloc(ta->data, 0, al->size, NULL);
+                    *(void **)(arguments[i]) = mempools[hpx_worker_id].allocate(al->size);
                   }
                 else if (kernel->arg_info[i].type == POCL_ARG_TYPE_POINTER)
                 {
@@ -694,7 +699,7 @@ void workgroup_thread (void* p, nd_pos const& gid)
                   {
                     dev_image_t di;
                     fill_dev_image_t(&di, al, ta->device);
-                    void* devptr = pocl_hpx_malloc(ta->data, 0, sizeof(dev_image_t), NULL);
+                    void* devptr = mempools[hpx_worker_id].allocate(sizeof(dev_image_t));
                     arguments[i] = &arguments_ind[i];
                     *(void **)(arguments[i]) = devptr;       
                     pocl_hpx_write (ta->data, &di, devptr, sizeof(dev_image_t));
@@ -704,8 +709,8 @@ void workgroup_thread (void* p, nd_pos const& gid)
                     dev_sampler_t ds;
                     
                     arguments[i] = &arguments_ind[i];
-                    *(void **)(arguments[i]) = pocl_hpx_malloc
-                      (ta->data, 0, sizeof(dev_sampler_t), NULL);
+                    *(void **)(arguments[i]) =
+                        mempools[hpx_worker_id].allocate(sizeof(dev_sampler_t));
                     pocl_hpx_write (ta->data, &ds, *(void**)arguments[i],
                                         sizeof(dev_sampler_t));
                   }
@@ -721,8 +726,7 @@ void workgroup_thread (void* p, nd_pos const& gid)
               {
                 al = &(ta->kernel_args[i]);
                 arguments[i] = &arguments_ind[i];
-                *(void **)(arguments[i]) = pocl_hpx_malloc (ta->data, 0, al->size,
-                                                                NULL);
+                *(void **)(arguments[i]) = mempools[hpx_worker_id].allocate(al->size);
               }
         }
         

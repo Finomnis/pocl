@@ -25,7 +25,7 @@
 noinst_LTLIBRARIES = libpocl-devices-hpx.la
 
 # HPX device driver lib
-libpocl_devices_hpx_la_SOURCES = pocl-hpx.h hpx-ext.h hpx.cpp nd_range_iterator.hpp nd_range_iterator.cpp
+libpocl_devices_hpx_la_SOURCES = pocl-hpx.h hpx-ext.h hpx.cpp nd_range_iterator.hpp nd_range_iterator.cpp mem_pool.hpp mem_pool.cpp
 
 libpocl_devices_hpx_la_CPPFLAGS = -I$(top_srcdir)/fix-include -I$(top_srcdir)/include -I$(top_srcdir)/lib/CL/devices -I$(top_srcdir)/lib/CL $(OCL_ICD_CFLAGS) @HPX_INCLUDE_FLAGS@
 libpocl_devices_hpx_la_LDFLAGS = -lltdl @PTHREAD_CFLAGS@ --version-info ${LIB_VERSION} @HPX_LINK_FLAGS@ @HPX_LIBS@
