@@ -52,6 +52,26 @@ pocl_topology_detect_device_info(cl_device_id device)
   if(depth != HWLOC_TYPE_DEPTH_UNKNOWN)
     device->max_compute_units = hwloc_get_nbobjs_by_depth(pocl_topology, depth);
 
+  // Try to get the LVL1 cache size from topology
+  hwloc_uint64_t cachesize = 0;
+  hwloc_obj_t obj = hwloc_get_obj_by_type(pocl_topology, HWLOC_OBJ_PU, 0);
+  while(obj)
+  {
+    obj = obj->parent;
+    if(obj->type == HWLOC_OBJ_CACHE)
+    {
+      if(obj->attr->cache.type == HWLOC_OBJ_CACHE_DATA ||
+         obj->attr->cache.type == HWLOC_OBJ_CACHE_UNIFIED)
+      {
+        cachesize = obj->attr->cache.size;
+        break;
+      }
+    }
+  }
+  
+  if(cachesize != 0)
+      device->local_mem_size = cachesize;
+
   // Destroy topology object and return
   hwloc_topology_destroy(pocl_topology);
 
