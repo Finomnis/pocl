@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 # 
 # Copyright (c) 2011-2013 Universidad Rey Juan Carlos and
-#                         Pekka Jääskeläinen / Tampere University of Technology
+#               2011-2014 Pekka Jääskeläinen / Tampere University of Technology
 # 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -23,7 +23,7 @@
 # THE SOFTWARE.
 
 AC_PREREQ([2.64])
-AC_INIT([pocl], [0.10-pre], [pocl-devel@lists.sourceforge.net])
+AC_INIT([pocl], [0.11-pre], [pocl-devel@lists.sourceforge.net])
 AC_CONFIG_SRCDIR([config.h.in])
 AC_CONFIG_HEADER([config.h])
 AC_CONFIG_AUX_DIR([config])
@@ -106,15 +106,11 @@ case "$LLVM_VERSION" in
      3.5*)
      AC_DEFINE([LLVM_3_5], [], "Using LLVM 3.5")
      LLVM_LDFLAGS="$LLVM_LDFLAGS `$LLVM_CONFIG --system-libs`"
-   ;;   
-     3.6*)
-     AC_DEFINE([LLVM_3_5], [], "Using upcoming LLVM 3.6")
-     LLVM_LDFLAGS="$LLVM_LDFLAGS `$LLVM_CONFIG --system-libs`"
    ;;
      *)
    AC_MSG_ERROR(
    [
-Unsupported LLVM version. Please use LLVM version 3.2, 3.3, or 3.4.
+Unsupported LLVM version. Please use LLVM version 3.2, 3.3, 3.4 or 3.5.
    ])
    LLVM_VERSION=
    ;;
@@ -1205,10 +1201,12 @@ PKG_CHECK_MODULES([LIBSPE], [libspe2 >= 2.2.80],
     OCL_DRIVERS="$OCL_DRIVERS spu"
     OCL_TARGETS="$OCL_TARGETS cellspu"
     AC_DEFINE([BUILD_SPU], [], [Defined when CellSPU tools are found])
+    BUILD_SPU=1
   ],
   [
     AC_MSG_NOTICE([libspe2 not found (by pkg-config). Spu driver not built.])
     LIBSPE_AVAILABLE=no
+    BUILD_SPU=0
   ])
 fi
 AM_CONDITIONAL([BUILD_SPU],[echo $OCL_DRIVERS | grep spu])
@@ -1348,9 +1346,10 @@ AC_C_BIGENDIAN
 # 2:0:1 == 0.8 (currently backwards compatible with 0.7, thus age = 1).
 # 3:0:2 == 0.9 (currently backwards compatible with 0.7, thus age = 2).
 # 4:0:3 == 0.10 (currently backwards compatible with 0.7, thus age = 3).
-LIB_CURRENT_VERSION=4
+# 5:0:4 == 0.11 (currently backwards compatible with 0.7, thus age = 4).
+LIB_CURRENT_VERSION=5
 LIB_REVISION_VERSION=0
-LIB_AGE_VERSION=3
+LIB_AGE_VERSION=4
 LIB_FIRST_VERSION=$(($LIB_CURRENT_VERSION - $LIB_AGE_VERSION))
 AC_SUBST([LIB_VERSION], ["$LIB_CURRENT_VERSION:$LIB_REVISION_VERSION:$LIB_AGE_VERSION"])
 AC_SUBST([LIB_CURRENT_VERSION], [$LIB_CURRENT_VERSION])
@@ -1361,7 +1360,7 @@ AC_SUBST([LIB_FIRST_VERSION], [$LIB_FIRST_VERSION])
 # The kernel compiler opt plugin shared library, however, changes more 
 # drastically. Let's try to follow the similar 'current' numbering as
 # the pocl host API library and perhaps tune the 'revision' and 'age' later.
-AC_SUBST([KERNEL_COMPILER_LIB_VERSION], ["3:0:0"])
+AC_SUBST([KERNEL_COMPILER_LIB_VERSION], ["$LIB_CURRENT_VERSION:0:0"])
 
 AC_SUBST([LD_FLAGS_BIN])
 

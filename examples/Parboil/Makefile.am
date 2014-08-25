@@ -22,7 +22,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 
-EXTRA_DIST = *.patch
+EXTRA_DIST = $(srcdir)/*.patch
 
 if TEST_SUITE_PARBOIL
 
@@ -147,9 +147,5 @@ build: build-spmv build-stencil build-tpacf build-cutcp build-mri-gridding build
 
 clean-examples:
 	$(RM) -r parboil
-
-distclean-local: clean-local
-	$(RM) -r $(testsuite_src_dir)
-	$(RM) ${driver_tarfile} ${benchmarks_tarfile} ${datasets_tarfile}
 
 endif
