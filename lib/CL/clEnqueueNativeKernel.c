@@ -25,26 +25,30 @@ POname(clEnqueueNativeKernel)(cl_command_queue   command_queue ,
   void *args_copy;
   int error;
 
-  if (command_queue == NULL)
-    return CL_INVALID_COMMAND_QUEUE;
+  POCL_RETURN_ERROR_COND((command_queue == NULL), CL_INVALID_COMMAND_QUEUE);
 
-  if (user_func == NULL)
-    return CL_INVALID_VALUE;
+  POCL_RETURN_ERROR_COND((user_func == NULL), CL_INVALID_VALUE);
 
-  if (args == NULL && (cb_args > 0 || num_mem_objects > 0))
-    return CL_INVALID_VALUE;
+  POCL_RETURN_ERROR_COND(((args == NULL) && (cb_args > 0 )), CL_INVALID_VALUE);
+  POCL_RETURN_ERROR_COND(((args == NULL) && (num_mem_objects > 0)), CL_INVALID_VALUE);
 
-  if (args != NULL && cb_args == 0)
-    return CL_INVALID_VALUE;
+  POCL_RETURN_ERROR_COND(((args != NULL) && (cb_args == 0)), CL_INVALID_VALUE);
 
-  if (num_mem_objects > 0 && (mem_list == NULL || args_mem_loc == NULL))
-    return CL_INVALID_VALUE;
+  POCL_RETURN_ERROR_COND(((num_mem_objects > 0) && (mem_list == NULL)), CL_INVALID_VALUE);
+  POCL_RETURN_ERROR_COND(((num_mem_objects > 0) && (args_mem_loc == NULL)), CL_INVALID_VALUE);
 
-  if (num_mem_objects == 0 && (mem_list != NULL || args_mem_loc != NULL))
-    return CL_INVALID_VALUE;
+  POCL_RETURN_ERROR_COND(((num_mem_objects == 0) && (mem_list != NULL)), CL_INVALID_VALUE);
+  POCL_RETURN_ERROR_COND(((num_mem_objects == 0) && (args_mem_loc != NULL)), CL_INVALID_VALUE);
 
-  if (!(command_queue->device->execution_capabilities & CL_EXEC_NATIVE_KERNEL))
-    return CL_INVALID_OPERATION;
+  POCL_RETURN_ERROR_ON(!(command_queue->device->execution_capabilities &
+    CL_EXEC_NATIVE_KERNEL), CL_INVALID_OPERATION, "device associated with "
+    "command_queue cannot execute the native kernel\n");
+
+  POCL_RETURN_ERROR_COND((event_wait_list == NULL && num_events_in_wait_list > 0),
+    CL_INVALID_EVENT_WAIT_LIST);
+
+  POCL_RETURN_ERROR_COND((event_wait_list != NULL && num_events_in_wait_list == 0),
+    CL_INVALID_EVENT_WAIT_LIST);
 
   error = pocl_create_command (&command_node, command_queue,
                                CL_COMMAND_NATIVE_KERNEL,
@@ -62,17 +66,17 @@ POname(clEnqueueNativeKernel)(cl_command_queue   command_queue ,
   args_copy = malloc (cb_args);
   if (args_copy == NULL)
     {
-      free (command_node);
+      POCL_MEM_FREE(command_node);
       return CL_OUT_OF_HOST_MEMORY;
     }
   memcpy (args_copy, args, cb_args);
 
   /* recopy the cl_mem object list to free them easily after run */
-  mem_list_copy = malloc(num_mem_objects * sizeof(cl_mem));
+  mem_list_copy = (cl_mem*) malloc(num_mem_objects * sizeof(cl_mem));
   if (mem_list_copy == NULL)
     {
-      free (args_copy);
-      free (command_node);
+      POCL_MEM_FREE(args_copy);
+      POCL_MEM_FREE(command_node);
       return CL_OUT_OF_HOST_MEMORY;
     }
   memcpy (mem_list_copy, mem_list, num_mem_objects * sizeof(cl_mem));
@@ -86,9 +90,9 @@ POname(clEnqueueNativeKernel)(cl_command_queue   command_queue ,
 
       if (mem_list[i] == NULL)
         {
-          free (args_copy);
-          free (mem_list_copy);
-          free (command_node);
+          POCL_MEM_FREE(args_copy);
+          POCL_MEM_FREE(mem_list_copy);
+          POCL_MEM_FREE(command_node);
           return CL_INVALID_MEM_OBJECT;
         }
 
@@ -98,7 +102,7 @@ POname(clEnqueueNativeKernel)(cl_command_queue   command_queue ,
       POname(clRetainMemObject) (mem_list[i]);
       /* args_mem_loc is a pointer relative to the original args, since we
        * recopy them, we must do some relocation */
-      off_t offset = (uintptr_t) loc - (uintptr_t) args;
+      ptrdiff_t offset = (uintptr_t) loc - (uintptr_t) args;
 
       arg_loc = (void *) ((uintptr_t) args_copy + (uintptr_t)offset);
 

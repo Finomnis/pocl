@@ -35,7 +35,7 @@ pkglib_LTLIBRARIES = llvmopencl.la
 
 AM_CXXFLAGS = -I@top_srcdir@/fix-include -I@top_srcdir@/include @LLVM_CXX_FLAGS@
 
-AM_LDFLAGS = -module -export-dynamic -version-info ${KERNEL_COMPILER_LIB_VERSION} @LLVM_LDFLAGS@
+AM_LDFLAGS = -module -export-dynamic @LLVM_LDFLAGS@
 
 PASSES_SOURCES = Barrier.h						\
                         BarrierBlock.h BarrierBlock.cc				\
@@ -48,7 +48,7 @@ PASSES_SOURCES = Barrier.h						\
                         Flatten.cc IsolateRegions.h IsolateRegions.cc \
 						WorkitemReplication.h WorkitemReplication.cc \
 						ImplicitLoopBarriers.h ImplicitLoopBarriers.cc \
-						WorkItemAliasAnalysis.cc WIVectorize.cc \
+						WorkItemAliasAnalysis.cc \
 						WorkitemHandler.h WorkitemHandler.cc \
 						WorkitemLoops.h WorkitemLoops.cc \
 						PHIsToAllocas.h PHIsToAllocas.cc \

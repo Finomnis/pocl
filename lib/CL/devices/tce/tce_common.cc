@@ -1,6 +1,6 @@
 /* tce_common.cc - common functionality over the different TCE/TTA device drivers.
 
-   Copyright (c) 2012-2013 Pekka Jääskeläinen / Tampere University of Technology
+   Copyright (c) 2012-2014 Pekka Jääskeläinen / Tampere University of Technology
    
    Permission is hereby granted, free of charge, to any person obtaining a copy
    of this software and associated documentation files (the "Software"), to deal
@@ -26,8 +26,13 @@
 #include "config.h"
 #include "install-paths.h"
 #include "pocl_runtime_config.h"
+#include "pocl_hash.h"
 
-#include <unistd.h>
+#ifndef _MSC_VER
+#  include <unistd.h>
+#else
+#  include "vccompat.hpp"
+#endif
 
 /* Supress some warnings because of including tce_config.h after pocl's config.h. */
 #undef PACKAGE
@@ -279,31 +284,6 @@ TCEDevice::updateCurrentKernel(const _cl_command_run* runCmd,
   curLocalZ = runCmd->local_z;
 }
 
-cl_int
-pocl_tce_alloc_mem_obj (cl_device_id device, cl_mem mem_obj)
-{
-  void *b = NULL;
-  TCEDevice *d = (TCEDevice*)device->data;
-  cl_int flags = mem_obj->flags;
-
-  /* if memory for this global memory is not yet allocated -> do it */
-  if (mem_obj->device_ptrs[device->global_mem_id].mem_ptr == NULL)
-    {
-      b = pocl_tce_malloc
-        (device->data, flags, mem_obj->size, mem_obj->mem_host_ptr);
-      if (b == NULL) return CL_MEM_OBJECT_ALLOCATION_FAILURE;
-      mem_obj->device_ptrs[device->global_mem_id].mem_ptr = b;
-      mem_obj->device_ptrs[device->global_mem_id].global_mem_id = 
-        device->global_mem_id;
-    }
-  /* copy already allocated global mem info to devices own slot */
-  mem_obj->device_ptrs[device->dev_id] = 
-    mem_obj->device_ptrs[device->global_mem_id];
-    
-  return CL_SUCCESS;
-
-}
-
 void *
 pocl_tce_malloc (void *device_data, cl_mem_flags flags,
                  size_t size, void *host_ptr)
@@ -327,6 +307,31 @@ pocl_tce_malloc (void *device_data, cl_mem_flags flags,
       return (void*) chunk;
     }
   return (void*) chunk;
+}
+
+cl_int
+pocl_tce_alloc_mem_obj (cl_device_id device, cl_mem mem_obj)
+{
+  void *b = NULL;
+  TCEDevice *d = (TCEDevice*)device->data;
+  cl_int flags = mem_obj->flags;
+
+  /* if memory for this global memory is not yet allocated -> do it */
+  if (mem_obj->device_ptrs[device->global_mem_id].mem_ptr == NULL)
+    {
+      b = pocl_tce_malloc
+        (device->data, flags, mem_obj->size, mem_obj->mem_host_ptr);
+      if (b == NULL) return CL_MEM_OBJECT_ALLOCATION_FAILURE;
+      mem_obj->device_ptrs[device->global_mem_id].mem_ptr = b;
+      mem_obj->device_ptrs[device->global_mem_id].global_mem_id = 
+        device->global_mem_id;
+    }
+  /* copy already allocated global mem info to devices own slot */
+  mem_obj->device_ptrs[device->dev_id] = 
+    mem_obj->device_ptrs[device->global_mem_id];
+    
+  return CL_SUCCESS;
+
 }
 
 void
@@ -637,10 +642,37 @@ pocl_tce_init_build(void *data, const char *dev_tmpdir)
   return include_switch;
 }
 
+void 
+pocl_tce_build_hash (void *data, SHA1_CTX *build_hash)
+{
+  TCEDevice *tce_dev = (TCEDevice*)data;
+  FILE* adf_file = fopen (tce_dev->machine_file.c_str(), "r");
+  size_t size, n;
+  uint8_t* adf_data = 0;
+  const char *extra_flags = NULL;
+  size_t ef_size;
+
+  fseek (adf_file, 0 , SEEK_END);
+  size = ftell (adf_file);
+  fseek (adf_file, 0, SEEK_SET);
+  adf_data = (uint8_t*)malloc (size);
+  fread (adf_data, 1, size, adf_file);
+  
+  //TCEString machine_hash = tce->dev->hash();
+  pocl_SHA1_Update (build_hash, adf_data, size);
+
+  if (pocl_is_option_set("POCL_TCECC_EXTRA_FLAGS"))
+    {
+      extra_flags = pocl_get_string_option("POCL_TCECC_EXTRA_FLAGS", "");
+      ef_size = strlen (extra_flags);
+      pocl_SHA1_Update (build_hash, (uint8_t*)extra_flags, ef_size);
+    }
+}
+
 void
 pocl_tce_copy (void */*data*/, const void *src_ptr, void *__restrict__ dst_ptr, size_t cb)
 {
-  POCL_ABORT_UNIMPLEMENTED();
+  POCL_ABORT_UNIMPLEMENTED("Copy not yet supported in TCE driver.");
   if (src_ptr == dst_ptr)
     return;
   
@@ -668,7 +700,7 @@ pocl_tce_copy_rect (void */*data*/,
   
   size_t j, k;
 
-  POCL_ABORT_UNIMPLEMENTED();
+  POCL_ABORT_UNIMPLEMENTED("Copy rect not yet supported in TCE driver.");
 
   /* TODO: handle overlaping regions */
   
@@ -701,7 +733,7 @@ pocl_tce_write_rect (void */*data*/,
   size_t j, k;
 
   /* TODO: handle overlaping regions */
-  POCL_ABORT_UNIMPLEMENTED();
+  POCL_ABORT_UNIMPLEMENTED("Write rect not yet supported in TCE driver.");
   
   for (k = 0; k < region[2]; ++k)
     for (j = 0; j < region[1]; ++j)
@@ -732,7 +764,7 @@ pocl_tce_read_rect (void */*data*/,
   size_t j, k;
   
   /* TODO: handle overlaping regions */
-  POCL_ABORT_UNIMPLEMENTED();
+  POCL_ABORT_UNIMPLEMENTED("Read rect not yet supported in TCE driver.");
   
   for (k = 0; k < region[2]; ++k)
     for (j = 0; j < region[1]; ++j)

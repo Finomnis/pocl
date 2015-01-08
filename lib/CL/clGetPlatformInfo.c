@@ -21,22 +21,8 @@
    THE SOFTWARE.
 */
 
-#include <string.h>
-#include "pocl_cl.h"
 #include "pocl_util.h"
 
-#define POCL_RETURN_PLATFORM_INFO_STR(__STR__)                        \
-  {                                                                 \
-    size_t const value_size = strlen(__STR__) + 1;                  \
-    if (param_value)                                                \
-      {                                                             \
-        if (param_value_size < value_size) return CL_INVALID_VALUE; \
-        memcpy(param_value, __STR__, value_size);                   \
-      }                                                             \
-    if (param_value_size_ret)                                       \
-      *param_value_size_ret = value_size;                           \
-    return CL_SUCCESS;                                              \
-  }                                                                 \
     
 CL_API_ENTRY cl_int CL_API_CALL 
 POname(clGetPlatformInfo)(cl_platform_id   platform,
@@ -50,40 +36,39 @@ POname(clGetPlatformInfo)(cl_platform_id   platform,
   cl_platform_id tmp_platform;
 
   // TODO: if we don't have ICD in use, platform==NULL should be valid & point to pocl
-  if (platform == NULL)
-    return CL_INVALID_PLATFORM;
+  POCL_RETURN_ERROR_COND((platform == NULL), CL_INVALID_PLATFORM);
 	
   POname(clGetPlatformIDs)(1, &tmp_platform, NULL);
-  if (platform != tmp_platform)
-    return CL_INVALID_PLATFORM;
+  POCL_RETURN_ERROR_ON((platform != tmp_platform), CL_INVALID_PLATFORM,
+    "Can only return info about the POCL platform\n");
 
   switch (param_name)
   {
     case CL_PLATFORM_PROFILE:
       // TODO: figure this out depending on the native execution host.
       // assume FULL_PROFILE for now.
-      POCL_RETURN_PLATFORM_INFO_STR("FULL_PROFILE");
+      POCL_RETURN_GETINFO_STR("FULL_PROFILE");
 
     case CL_PLATFORM_VERSION:
-      POCL_RETURN_PLATFORM_INFO_STR("OpenCL 1.2 pocl " PACKAGE_VERSION);
+      POCL_RETURN_GETINFO_STR("OpenCL 1.2 pocl " PACKAGE_VERSION);
 
     case CL_PLATFORM_NAME:
-      POCL_RETURN_PLATFORM_INFO_STR("Portable Computing Language");
+      POCL_RETURN_GETINFO_STR("Portable Computing Language");
 
     case CL_PLATFORM_VENDOR:
-      POCL_RETURN_PLATFORM_INFO_STR("The pocl project");
+      POCL_RETURN_GETINFO_STR("The pocl project");
 
     case CL_PLATFORM_EXTENSIONS:
-      // TODO: do we want to list all suppoted extensions *here*, or in some header?.
+      // TODO: do we want to list all supported extensions *here*, or in some header?.
       // TODO: yes, it is better here: available through ICD Loader and headers can be the ones from Khronos
 #ifdef BUILD_ICD
-      POCL_RETURN_PLATFORM_INFO_STR("cl_khr_icd");
+      POCL_RETURN_GETINFO_STR("cl_khr_icd");
 #else
-      POCL_RETURN_PLATFORM_INFO_STR("");
+      POCL_RETURN_GETINFO_STR("");
 #endif
 
     case CL_PLATFORM_ICD_SUFFIX_KHR:
-      POCL_RETURN_PLATFORM_INFO_STR("POCL");
+      POCL_RETURN_GETINFO_STR("POCL");
 
     default: 
       return CL_INVALID_VALUE;

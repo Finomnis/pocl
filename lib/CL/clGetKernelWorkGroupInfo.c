@@ -4,21 +4,7 @@
 
 
 #include "devices/devices.h"
-#include "pocl_cl.h"
 #include "pocl_util.h"
-
-#define POCL_RETURN_KERNEL_WG_INFO(__TYPE__, __VALUE__)                \
-  {                                                                 \
-    size_t const value_size = sizeof(__TYPE__);                     \
-    if (param_value)                                                \
-      {                                                             \
-        if (param_value_size < value_size) return CL_INVALID_VALUE; \
-        *(__TYPE__*)param_value = __VALUE__;                        \
-      }                                                             \
-    if (param_value_size_ret)                                       \
-      *param_value_size_ret = value_size;                           \
-    return CL_SUCCESS;                                              \
-  } 
 
 
 extern CL_API_ENTRY cl_int CL_API_CALL
@@ -39,17 +25,19 @@ POname(clGetKernelWorkGroupInfo)
       int found_it = 0;
       for (i = 0; i < kernel->context->num_devices; i++)
         if (device == kernel->context->devices[i])
-	  {
-	    found_it = 1;
-	    break;
-	  }
-      if (!found_it)
-        return CL_INVALID_DEVICE;      
+        {
+          found_it = 1;
+          break;
+        }
+      POCL_RETURN_ERROR_ON((!found_it), CL_INVALID_DEVICE, "could not find the "
+        "device supplied in argument\n");
     }
-  else if (kernel->context->num_devices > 1)
-    return CL_INVALID_DEVICE;
   else
-    device = kernel->context->devices[0];
+    {
+      POCL_RETURN_ERROR_ON((kernel->context->num_devices > 1), CL_INVALID_DEVICE,
+        "No device given and context has > 1 device\n");
+      device = kernel->context->devices[0];
+    }
 
   switch (param_name)
     {
@@ -71,7 +59,7 @@ POname(clGetKernelWorkGroupInfo)
     }
       
     case CL_KERNEL_PREFERRED_WORK_GROUP_SIZE_MULTIPLE:
-      POCL_RETURN_KERNEL_WG_INFO(size_t, device->preferred_wg_size_multiple);
+      POCL_RETURN_GETINFO(size_t, device->preferred_wg_size_multiple);
       
     case CL_KERNEL_LOCAL_MEM_SIZE:
     {
@@ -91,11 +79,11 @@ POname(clGetKernelWorkGroupInfo)
 #if 0
       printf("### local memory usage %d\n", local_size);
 #endif
-      POCL_RETURN_KERNEL_WG_INFO(cl_ulong, local_size);
+      POCL_RETURN_GETINFO(cl_ulong, local_size);
     }
       
     case CL_KERNEL_PRIVATE_MEM_SIZE:
-      POCL_ABORT_UNIMPLEMENTED();
+      POCL_ABORT_UNIMPLEMENTED("clGetKernelWorkGroupInfo: CL_KERNEL_PRIVATE_MEM_SIZE");
 
     default:
       return CL_INVALID_VALUE;

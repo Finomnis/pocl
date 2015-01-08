@@ -37,7 +37,7 @@
 #include "llvm/IR/DataLayout.h"
 #endif
 
-#if (defined LLVM_3_1 or defined LLVM_3_2)
+#if (defined LLVM_3_1 || defined LLVM_3_2)
 #include "llvm/Argument.h"
 #include "llvm/Constants.h"
 #include "llvm/DerivedTypes.h"
@@ -94,7 +94,7 @@ static RegisterPass<GenerateHeader> X("generate-header",
 void
 GenerateHeader::getAnalysisUsage(AnalysisUsage &AU) const
 {
-#if (defined LLVM_3_2 or defined LLVM_3_3 or defined LLVM_3_4)
+#if (defined LLVM_3_2 || defined LLVM_3_3 || defined LLVM_3_4)
   AU.addRequired<DataLayout>();
 #else
   AU.addRequired<DataLayoutPass>();
@@ -111,11 +111,18 @@ GenerateHeader::runOnModule(Module &M)
   // kernels
   FunctionMapping kernels;
 
+  #if LLVM_VERSION_MAJOR <= 3 && LLVM_VERSION_MINOR <6
   string ErrorInfo;
-  #if defined LLVM_3_2 or defined LLVM_3_3 
-  raw_fd_ostream out(Header.c_str(), ErrorInfo, raw_fd_ostream::F_Append);
   #else
+  std::error_code ErrorInfo;
+  #endif
+
+  #if defined LLVM_3_2 || defined LLVM_3_3 
+  raw_fd_ostream out(Header.c_str(), ErrorInfo, raw_fd_ostream::F_Append);
+  #elif defined LLVM_3_4 || defined LLVM_3_5
   raw_fd_ostream out(Header.c_str(), ErrorInfo, sys::fs::F_Append);
+  #else
+  raw_fd_ostream out(Header, ErrorInfo, sys::fs::F_Append);
   #endif
 
   for (Module::iterator mi = M.begin(), me = M.end(); mi != me; ++mi) {
@@ -163,11 +170,26 @@ GenerateHeader::ProcessReqdWGSize(Function *F,
   if (size_info) {
     for (unsigned i = 0, e = size_info->getNumOperands(); i != e; ++i) {
       llvm::MDNode *KernelSizeInfo = size_info->getOperand(i);
-      if (KernelSizeInfo->getOperand(0) == F) {
-        LocalSizeX = (llvm::cast<ConstantInt>(KernelSizeInfo->getOperand(1)))->getLimitedValue();
-        LocalSizeY = (llvm::cast<ConstantInt>(KernelSizeInfo->getOperand(2)))->getLimitedValue();
-        LocalSizeZ = (llvm::cast<ConstantInt>(KernelSizeInfo->getOperand(3)))->getLimitedValue();
-      }
+#ifdef LLVM_OLDER_THAN_3_6
+      if (KernelSizeInfo->getOperand(0) != F) 
+        continue;
+      LocalSizeX = (llvm::cast<ConstantInt>(KernelSizeInfo->getOperand(1)))->getLimitedValue();
+      LocalSizeY = (llvm::cast<ConstantInt>(KernelSizeInfo->getOperand(2)))->getLimitedValue();
+      LocalSizeZ = (llvm::cast<ConstantInt>(KernelSizeInfo->getOperand(3)))->getLimitedValue();
+#else
+      if (dyn_cast<ValueAsMetadata>(KernelSizeInfo->getOperand(0).get())->getValue() != F) 
+        continue;
+      LocalSizeX = (llvm::cast<ConstantInt>(
+                     llvm::dyn_cast<ConstantAsMetadata>(
+                       KernelSizeInfo->getOperand(1))->getValue()))->getLimitedValue();
+      LocalSizeY = (llvm::cast<ConstantInt>(
+                     llvm::dyn_cast<ConstantAsMetadata>(
+                       KernelSizeInfo->getOperand(2))->getValue()))->getLimitedValue();
+      LocalSizeZ = (llvm::cast<ConstantInt>(
+                     llvm::dyn_cast<ConstantAsMetadata>(
+                       KernelSizeInfo->getOperand(3))->getValue()))->getLimitedValue();
+#endif
+      break;
     }
   }
 
@@ -185,12 +207,12 @@ GenerateHeader::ProcessPointers(Function *F,
   int num_args = F->getFunctionType()->getNumParams();
     
   out << "#define _" << F->getName() << "_NUM_ARGS " << num_args << '\n';
-      
-  bool is_pointer[num_args];
-  bool is_local[num_args];
-  bool is_image[num_args];
-  bool is_sampler[num_args];
-  
+
+  bool *is_pointer = (bool*) malloc(sizeof(bool) * num_args);
+  bool *is_local = (bool*)malloc(sizeof(bool)* num_args);
+  bool *is_image = (bool*)malloc(sizeof(bool)* num_args);
+  bool *is_sampler = (bool*)malloc(sizeof(bool)* num_args);
+
   int i = 0;
   for (Function::const_arg_iterator ii = F->arg_begin(),
          ee = F->arg_end();
@@ -265,6 +287,11 @@ GenerateHeader::ProcessPointers(Function *F,
       out << ", " << is_sampler[i];
   }
   out << "}\n";
+
+  free(is_pointer);
+  free(is_local);
+  free(is_image);
+  free(is_sampler);
 }
 
 
@@ -273,7 +300,7 @@ GenerateHeader::ProcessAutomaticLocals(Function *F,
                                        raw_fd_ostream &out)
 {
   Module *M = F->getParent();
-#if (defined LLVM_3_2 or defined LLVM_3_3 or defined LLVM_3_4)
+#if (defined LLVM_3_2 || defined LLVM_3_3 || defined LLVM_3_4)
   DataLayout &TDr = getAnalysis<DataLayout>();
   DataLayout *TD=&TDr;
 #else

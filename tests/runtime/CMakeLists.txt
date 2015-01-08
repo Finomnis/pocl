@@ -42,6 +42,9 @@ set(PROGRAMS_TO_BUILD test_clFinish test_clGetDeviceInfo test_clGetEventInfo
 add_compile_options(${OPENCL_CFLAGS})
 
 foreach(PROG ${PROGRAMS_TO_BUILD})
+  if(MSVC)
+    set_source_files_properties( "${PROG}.c" PROPERTIES LANGUAGE CXX )
+  endif(MSVC)
   add_executable("${PROG}" "${PROG}.c")
   target_link_libraries("${PROG}" ${POCLU_LINK_OPTIONS})
 endforeach()
@@ -67,7 +70,8 @@ add_test("runtime/clCreateKernel" "test_clCreateKernel")
 
 add_test("runtime/clGetKernelArgInfo" "test_clGetKernelArgInfo")
 
-add_test("runtime/clSetEventCallback" "test_clSetEventCallback")
+add_test_custom("${CMAKE_CURRENT_BINARY_DIR}/test_clSetEventCallback"
+                "runtime/clSetEventCallback" "test_clSetEventCallback_expout.txt" )
 
 add_test("runtime/clGetSupportedImageFormats" "test_clGetSupportedImageFormats")
 
@@ -91,12 +95,11 @@ set_tests_properties("runtime/clCreateKernelsInProgram"
   PROPERTIES
     PASS_REGULAR_EXPRESSION "Hello\nWorld")
 
-set_tests_properties("runtime/clSetEventCallback"
-  PROPERTIES
-    PASS_REGULAR_EXPRESSION "kernel in execution
-Callback function: event status: CL_SUBMITTED
-Callback function: event status: CL_RUNNING
-Callback function: event status: CL_COMPLETE")
+if(LLVM_3_2)
+  set_tests_properties("runtime/clGetKernelArgInfo"
+    PROPERTIES WILL_FAIL 1)
+endif()
+
 
 
 set_tests_properties("runtime/clFinish"

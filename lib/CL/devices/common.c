@@ -26,7 +26,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
+
+#ifndef _MSC_VER
+#  include <unistd.h>
+#else
+#  include "vccompat.hpp"
+#endif
+
 #include "config.h"
 
 #include "pocl_image_util.h"
@@ -58,18 +64,21 @@ llvm_codegen (const char* tmpdir, cl_kernel kernel, cl_device_id device) {
   char bytecode[POCL_FILENAME_LENGTH];
   char objfile[POCL_FILENAME_LENGTH];
 
-  char* module = malloc(min(POCL_FILENAME_LENGTH, 
-	   strlen(tmpdir) + strlen("/parallel.so") + 1)); 
+  char* module = (char*) malloc(min(POCL_FILENAME_LENGTH, 
+	   strlen(tmpdir) + strlen(kernel->function_name) + 5)); // strlen of / .so 4+1
+
   int error;
   cl_program program = kernel->program;
 
   error = snprintf 
     (module, POCL_FILENAME_LENGTH,
-     "%s/parallel.so", tmpdir);
+     "%s/%s.so", tmpdir, kernel->function_name);
+
   assert (error >= 0);
+
   error = snprintf
     (objfile, POCL_FILENAME_LENGTH,
-     "%s/parallel.so.o", tmpdir);
+     "%s/%s.so.o", tmpdir, kernel->function_name);
   assert (error >= 0);
 
 
@@ -84,10 +93,12 @@ llvm_codegen (const char* tmpdir, cl_kernel kernel, cl_device_id device) {
 
       // clang is used as the linker driver in LINK_CMD
       error = snprintf (command, COMMAND_LENGTH,
-                       LINK_CMD " " HOST_CLANG_FLAGS " " HOST_LD_FLAGS " "
-                        "-o %s %s.o",
-                       module,
-                       module);
+#ifndef POCL_ANDROID
+            LINK_CMD " " HOST_CLANG_FLAGS " " HOST_LD_FLAGS " -o %s %s",
+#else
+            POCL_ANDROID_PREFIX"/bin/ld " HOST_LD_FLAGS " -o %s %s ",
+#endif
+            module, objfile);
       assert (error >= 0);
 
       if (pocl_verbose) {
@@ -96,6 +107,13 @@ llvm_codegen (const char* tmpdir, cl_kernel kernel, cl_device_id device) {
       }
       error = system (command);
       assert (error == 0);
+
+      /* Save space in kernel cache */
+      if (!pocl_get_bool_option("POCL_LEAVE_KERNEL_COMPILER_TEMP_FILES", 0))
+        {
+          pocl_remove_file(objfile);
+          pocl_remove_file(bytecode);
+        }
     }
   return module;
 }
@@ -105,10 +123,10 @@ llvm_codegen (const char* tmpdir, cl_kernel kernel, cl_device_id device) {
  * from given kernel image argument
  */
 void fill_dev_image_t (dev_image_t* di, struct pocl_argument* parg, 
-                       cl_int device)
+                       cl_device_id device)
 {
   cl_mem mem = *(cl_mem *)parg->value;
-  di->data = (mem->device_ptrs[device].mem_ptr);  
+  di->data = (mem->device_ptrs[device->dev_id].mem_ptr);
   di->width = mem->image_width;
   di->height = mem->image_height;
   di->depth = mem->image_depth;
@@ -120,3 +138,20 @@ void fill_dev_image_t (dev_image_t* di, struct pocl_argument* parg,
                               mem->image_channel_data_type, &(di->num_channels),
                               &(di->elem_size));
 }
+
+void*
+pocl_memalign_alloc(size_t align_width, size_t size)
+{
+  void *ptr;
+  int status;
+
+#ifndef POCL_ANDROID
+  status = posix_memalign(&ptr, align_width, size);
+  return ((status == 0)? ptr: (void*)NULL);
+#else
+  ptr = memalign(align_width, size);
+  return ptr;
+#endif
+}
+
+

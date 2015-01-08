@@ -34,7 +34,7 @@ set(LLVMPASSES_SOURCES "Barrier.h"
                         "Flatten.cc" "IsolateRegions.h" "IsolateRegions.cc"
             "WorkitemReplication.h" "WorkitemReplication.cc"
             "ImplicitLoopBarriers.h" "ImplicitLoopBarriers.cc"
-            "WorkItemAliasAnalysis.cc" "WIVectorize.cc"
+            "WorkItemAliasAnalysis.cc" 
             "WorkitemHandler.h" "WorkitemHandler.cc"
             "WorkitemLoops.h" "WorkitemLoops.cc"
             "PHIsToAllocas.h" "PHIsToAllocas.cc"
@@ -52,6 +52,10 @@ set(LLVMPASSES_SOURCES "Barrier.h"
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${LLVM_CFLAGS}")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${LLVM_CXXFLAGS}")
 
+if(MSVC)
+  set_source_files_properties( ${LLVMPASSES_SOURCES} PROPERTIES LANGUAGE CXX )
+endif(MSVC)
+
 # This library (just a bunch of objects really) is linked against libpocl
 # to call the kernel compiler passes directly from the host library.
 #noinst_LTLIBRARIES = libllvmpasses.la
@@ -62,6 +66,14 @@ add_library("llvmpasses" OBJECT ${LLVMPASSES_SOURCES} "linker.cpp" "linker.h")
 #pkglib_LTLIBRARIES = llvmopencl.la
 add_library("llvmopencl" MODULE "$<TARGET_OBJECTS:llvmpasses>")
 
+# not sure where other platforms get their library linkage list, probably there is
+# way to make this more consistent on different platforms
+if(MSVC)
+  target_link_libraries("llvmopencl" "${POCL_LLVM_LIBS}")
+endif(MSVC)
+
+#target_link_libraries("llvmopencl" "${LLVM_SYSLIBS}")
+ 
 # TODO cmake should handle this, i might me missing something …
 if(APPLE)
   set(ADD_LD_FLAGS "-Wl,-undefined -Wl,dynamic_lookup ")

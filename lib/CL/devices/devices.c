@@ -22,12 +22,18 @@
    THE SOFTWARE.
 */
 
-#include <unistd.h>
 #include <string.h>
 #include <ctype.h>
 
+#ifndef _MSC_VER
+#  include <unistd.h>
+#else
+#  include "vccompat.hpp"
+#endif
+
 #include "devices.h"
 #include "common.h"
+#include "pocl_runtime_config.h"
 #include "basic/basic.h"
 #include "pthread/pocl-pthread.h"
 
@@ -48,6 +54,13 @@
 /* the enabled devices */
 static struct _cl_device_id* pocl_devices = NULL;
 unsigned int pocl_num_devices = 0;
+
+#ifdef POCL_DEBUG_MESSAGES
+int pocl_debug_messages;
+#ifdef HAVE_CLOCK_GETTIME
+struct timespec pocl_debug_timespec;
+#endif
+#endif
 
 /* Init function prototype */
 typedef void (*init_device_ops)(struct pocl_device_ops*);
@@ -90,7 +103,7 @@ int pocl_device_get_env_count(const char *dev_type)
         dev_count++;
       ptr = NULL;
     }
-  free (tofree);
+  POCL_MEM_FREE(tofree);
 
   return dev_count;
 }
@@ -163,6 +176,20 @@ str_toupper(char *out, const char *in)
   out[i] = '\0';
 }
 
+static inline void
+pocl_string_to_dirname(char *str)
+{
+  char *s_ptr;
+  if (!str) return;
+
+  // Replace special characters with '_'
+  for (s_ptr = str; (*s_ptr); s_ptr++)
+    {
+      if (!isalnum(*s_ptr))
+        *s_ptr = '_';
+    }
+}
+
 void 
 pocl_init_devices()
 {
@@ -174,12 +201,20 @@ pocl_init_devices()
   char dev_name[MAX_DEV_NAME_LEN] = {0};
   unsigned int device_count[POCL_NUM_DEVICE_TYPES];
 
+  if (init_done == 0)
+    POCL_INIT_LOCK(pocl_init_lock);
   POCL_LOCK(pocl_init_lock);
   if (init_done) 
     {
       POCL_UNLOCK(pocl_init_lock);
       return;
     }
+
+  /* Set a global debug flag, so we don't have to call pocl_get_bool_option
+   * everytime we use the debug macros */
+#ifdef POCL_DEBUG_MESSAGES
+  pocl_debug_messages = pocl_get_bool_option("POCL_DEBUG", 0);
+#endif
 
   /* Init operations */
   for (i = 0; i < POCL_NUM_DEVICE_TYPES; ++i)
@@ -194,7 +229,7 @@ pocl_init_devices()
     }
 
   assert(pocl_num_devices > 0);
-  pocl_devices = calloc(pocl_num_devices, sizeof(struct _cl_device_id));
+  pocl_devices = (struct _cl_device_id*) calloc(pocl_num_devices, sizeof(struct _cl_device_id));
   if (pocl_devices == NULL)
     POCL_ABORT("Can not allocate memory for devices\n");
 
@@ -206,6 +241,7 @@ pocl_init_devices()
       for (j = 0; j < device_count[i]; ++j)
         {
           pocl_devices[dev_index].ops = &pocl_device_ops[i];
+          pocl_devices[dev_index].dev_id = dev_index;
           /* The default value for the global memory space identifier is
              the same as the device id. The device instance can then override 
              it to point to some other device's global memory id in case of
@@ -226,6 +262,9 @@ pocl_init_devices()
 
           if (dev_index == 0)
             pocl_devices[dev_index].type |= CL_DEVICE_TYPE_DEFAULT;
+
+          pocl_devices[dev_index].cache_dir_name = strdup(pocl_devices[dev_index].long_name);
+          pocl_string_to_dirname(pocl_devices[dev_index].cache_dir_name);
           
           ++dev_index;
         }

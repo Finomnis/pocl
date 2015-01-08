@@ -27,7 +27,7 @@ cmake_minimum_required(VERSION 2.8.12 FATAL_ERROR)
 
 project(pocl)
 set(MAJOR_VERSION 0)
-set(MINOR_VERSION 10)
+set(MINOR_VERSION 11)
 set(VERSION_SUFFIX "-pre")
 set(VERSION_STRING ${MAJOR_VERSION}.${MINOR_VERSION}${VERSION_SUFFIX})
 set(POCL_VERSION ${VERSION_STRING})
@@ -38,47 +38,63 @@ set(POCL_VERSION ${VERSION_STRING})
 
 if(UNIX)
   include(GNUInstallDirs)
-
-  # for libpocl.so
-  set(POCL_INSTALL_PUBLIC_LIBDIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}" CACHE PATH "POCL public libdir")
-
-  # for llvmopencl.so
-  set(POCL_INSTALL_PRIVATE_LIBDIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/pocl" CACHE PATH "POCL private libdir")
-
-  # for pocl.icd
-  set(POCL_INSTALL_ICD_VENDORDIR "/etc/OpenCL/vendors" CACHE PATH "POCL ICD file destination")
-
-  # for kernel-<target>.bc
-  set(POCL_INSTALL_PRIVATE_DATADIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/pocl" CACHE PATH "POCL private datadir")
-
-  # for poclu.h
-  set(POCL_INSTALL_PUBLIC_HEADER_DIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}" CACHE PATH "POCL public header dir")
-
-  # for _kernel.h et al
-  set(POCL_INSTALL_PRIVATE_HEADER_DIR "${POCL_INSTALL_PRIVATE_DATADIR}/include" CACHE PATH "POCL private header dir")
-
-  # for pocl-standalone et al
-  set(POCL_INSTALL_PUBLIC_BINDIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}" CACHE PATH "POCL public bindir")
-
-  # for PoclConfig.cmake & stuff
-  set(POCL_INSTALL_CMAKE_CONFIG_DIR "${POCL_INSTALL_PRIVATE_LIBDIR}" CACHE PATH   "Installation directory for CMake files")
-
-  # TODO maybe use output of pkg-config --variable=pc_path pkg-config ?
-  set(POCL_INSTALL_PKGCONFIG_DIR "${POCL_INSTALL_PUBLIC_LIBDIR}/pkgconfig" CACHE PATH "Destination for pocl.pc")
-
-  if(APPLE)
-    set(POCL_INSTALL_OPENCL_HEADER_DIR "${POCL_INSTALL_PUBLIC_HEADER_DIR}/OpenCL" CACHE PATH "POCL header dir for OpenCL headers")
-  else()
-    set(POCL_INSTALL_OPENCL_HEADER_DIR "${POCL_INSTALL_PUBLIC_HEADER_DIR}/CL" CACHE PATH "POCL header dir for OpenCL headers")
-  endif()
-
 else()
-  # todo other platforms
-  message(FATAL_ERROR "not implemented yet")
+  if (WIN32)
+    set(CMAKE_INSTALL_PREFIX ${CMAKE_BINARY_DIR}/install)
+    set(${CMAKE_INSTALL_LIBDIR} "lib")
+    set(${CMAKE_INSTALL_DATADIR} "share")
+    set(${CMAKE_INSTALL_INCLUDEDIR} "include")
+    set(${CMAKE_INSTALL_BINDIR} "bin")
+    message(STATUS "Setting installation destination on Windows to: ${CMAKE_INSTALL_PREFIX}")
+  else()
+    message(FATAL_ERROR "not implemented yet")    
+  endif()
 endif()
 
+# for libpocl.so
+set(POCL_INSTALL_PUBLIC_LIBDIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}" CACHE PATH "POCL public libdir")
+
+# for llvmopencl.so
+set(POCL_INSTALL_PRIVATE_LIBDIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/pocl" CACHE PATH "POCL private libdir")
+
+# for pocl.icd
+if (UNIX AND NOT CMAKE_CROSSCOMPILING)
+  set(POCL_INSTALL_ICD_VENDORDIR "/etc/OpenCL/vendors" CACHE PATH "POCL ICD file destination")
+else()
+  set(POCL_INSTALL_ICD_VENDORDIR "${CMAKE_INSTALL_PREFIX}/etc/OpenCL/vendors" CACHE PATH "POCL ICD file destination")
+endif()
+
+# for kernel-<target>.bc
+set(POCL_INSTALL_PRIVATE_DATADIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/pocl" CACHE PATH "POCL private datadir")
+
+# for poclu.h
+set(POCL_INSTALL_PUBLIC_HEADER_DIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}" CACHE PATH "POCL public header dir")
+
+# for _kernel.h et al
+set(POCL_INSTALL_PRIVATE_HEADER_DIR "${POCL_INSTALL_PRIVATE_DATADIR}/include" CACHE PATH "POCL private header dir")
+
+# for pocl-standalone et al
+set(POCL_INSTALL_PUBLIC_BINDIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}" CACHE PATH "POCL public bindir")
+
+# for PoclConfig.cmake & stuff
+set(POCL_INSTALL_CMAKE_CONFIG_DIR "${POCL_INSTALL_PRIVATE_LIBDIR}" CACHE PATH   "Installation directory for CMake files")
+
+# TODO maybe use output of pkg-config --variable=pc_path pkg-config ?
+set(POCL_INSTALL_PKGCONFIG_DIR "${POCL_INSTALL_PUBLIC_LIBDIR}/pkgconfig" CACHE PATH "Destination for pocl.pc")
+
+if(APPLE)
+  set(POCL_INSTALL_OPENCL_HEADER_DIR "${POCL_INSTALL_PUBLIC_HEADER_DIR}/OpenCL" CACHE PATH "POCL header dir for OpenCL headers")
+else()
+  set(POCL_INSTALL_OPENCL_HEADER_DIR "${POCL_INSTALL_PUBLIC_HEADER_DIR}/CL" CACHE PATH "POCL header dir for OpenCL headers")
+endif()
 
 option(BUILD_SHARED_LIBS "ON=Build shared libs, OFF=static libs" ON)
+
+# TODO measure slowdown with compiled but disabled debug, see if it can default to always compile in
+option(
+  POCL_DEBUG_MESSAGES
+  "Enable debug messages from pocl (useful for OpenCL developers), must be enabled at runtime, with env var POCL_DEBUG"
+  OFF)
 
 # required b/c SHARED libs defaults to ON while OBJECT defaults to OFF
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
@@ -89,11 +105,56 @@ enable_testing()
 
 ######################################################################################
 
-find_package(PkgConfig MODULE REQUIRED)
+if (UNIX)
+  find_package(PkgConfig MODULE REQUIRED)
+endif()
 
-pkg_check_modules(HWLOC REQUIRED hwloc>=1.0)
-if(NOT HWLOC_FOUND)
+######################################################################################
+set(ANDROID_COMPILER 0)
+if (CMAKE_C_COMPILER MATCHES "android")
+  set(ANDROID_COMPILER 1)
+  add_definitions(-DPOCL_ANDROID)
+  add_definitions(-DPOCL_ANDROID_PREFIX="/data/data/org.pocl.libs/files")
+endif ()
+
+######################################################################################
+
+set(CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
+find_package( Hwloc )
+
+if(NOT Hwloc_FOUND)
   message(FATAL_ERROR "hwloc package is required!")
+endif()
+
+if("${Hwloc_VERSION}" VERSION_LESS "1.0")
+  message(FATAL_ERROR "Hwloc version must be >= 1.0 !")
+endif()
+
+message(STATUS "Hwloc_VERSION ${Hwloc_VERSION}")
+message(STATUS "Hwloc_LIBRARIES ${Hwloc_LIBRARIES}")
+message(STATUS "Hwloc_INCLUDE_DIRS ${Hwloc_INCLUDE_DIRS}")
+
+include_directories(${Hwloc_INCLUDE_DIRS})
+
+######################################################################################
+#
+# Find executables to few tools required during build 
+#
+
+find_program (PATCH_EXEC 
+  NAMES patch patch.exe
+)
+
+find_program (XARGS_EXEC 
+  NAMES xargs xargs.exe
+)
+
+find_program (CAT_EXEC 
+  NAMES cat cat.exe
+)
+
+if (!PATCH_EXEC)
+  message(FATAL_ERROR "Could not find patch command.")
 endif()
 
 ######################################################################################
@@ -107,6 +168,10 @@ endif()
 if("${LLVM_VERSION}" VERSION_LESS "3.2")
   message(FATAL_ERROR "POCL requires LLVM version >= 3.2 !")
 endif()
+
+include_directories("${LLVM_INCLUDE_DIRS}")
+link_directories(${LLVM_LIBDIR})
+
 
 ######################################################################################
 
@@ -154,6 +219,17 @@ setup_cached_var(ENABLE_DOCS "Documentation building"
   "Requested enabling documentation, but could not find Sphinx ! -> disabling docs.."
   "Sphinx found, but requested disabling docs")
 
+######################################################################################
+
+include(CheckCSourceCompiles)
+CHECK_C_SOURCE_COMPILES("
+#include <time.h>
+int main() {
+  struct timespec pocl_debug_timespec;
+  clock_gettime(CLOCK_REALTIME, &pocl_debug_timespec);
+  return 0;
+}
+" HAVE_CLOCK_GETTIME)
 
 ######################################################################################
 
@@ -189,6 +265,8 @@ if(UNIX)
     # ld: warning: -macosx_version_min not specificed, assuming 10.7
     # suppress them with -w.
     set(DEFAULT_HOST_LD_FLAGS "-Wl,-dylib -lm")
+  elseif(ANDROID_COMPILER)
+    set(DEFAULT_HOST_LD_FLAGS "-L/system/lib/ -shared -ldl -lc -lm /system/lib/crtbegin_so.o /system/lib/crtend_so.o")
   else()
     set(DEFAULT_HOST_LD_FLAGS "-shared -lm")
   endif()
@@ -200,7 +278,7 @@ endif()
 option(USE_VECMATHLIB_BUILTINS_ONLY "Use only __builtin_* functions in the kernel library." OFF)
 
 if(USE_VECMATHLIB)
-  set(DEFAULT_KERNEL_CLANGXX_FLAGS "-DVML_NO_IOSTREAM")
+  set(DEFAULT_KERNEL_CLANGXX_FLAGS "-DVML_NO_IOSTREAM ${CLANGXX_STDLIB}")
 endif()
 set(DEFAULT_KERNEL_CL_FLAGS "-D__OPENCL_VERSION__=120")
 
@@ -227,7 +305,13 @@ option(STATIC_LLVM "Link LLVM statically. Default is dynamic." OFF)
 
 if(STATIC_LLVM)
   message(STATUS "Linking LLVM statically")
-  set(POCL_LLVM_LIBS "${LLVM_LIBFILES}")
+  # Using LLVM_LIB_NAMES should work on every platform, but for now used only on MSVC to avoid 
+  # possibility of regression
+  if (MSVC)
+    set(POCL_LLVM_LIBS "${LLVM_LIB_NAMES}")
+  else()
+    set(POCL_LLVM_LIBS "${LLVM_LIBFILES}")
+  endif()
 else()
   message(STATUS "Trying to link LLVM dynamically")
   set(POCL_LLVM_LIBS "-lLLVM-${LLVM_VERSION}")
@@ -252,33 +336,54 @@ option(CUSTOM_BUFFER_ALLOCATOR "Use a custom OpenCL optimized region-based memor
 
 ######################################################################################
 
-find_library(LTDL_LIB "ltdl")
-find_file(LTDL_H "ltdl.h")
-if(LTDL_LIB AND LTDL_H)
-  message(STATUS "ltdl found")
-
-  get_filename_component(LTDL_H_INCLUDE_DIR "${LTDL_H}" DIRECTORY)
-  string(FIND "${CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES}" "${LTDL_H_INCLUDE_DIR}" LTPOSITION)
-  # include the directory of ltdl.h, if its not in the default system include dirs
-  if(LTPOSITION LESS "0")
-    include_directories("${LTDL_H_INCLUDE_DIR}")
-  endif()
-
+if(WIN32)
+    message(STATUS "Using LoadLibrary/FreeLibrary in Windows, libltdl not needed.")
 else()
-  message(FATAL_ERROR "Could not find LTDL library!")
+  find_library(LTDL_LIB "ltdl")
+  find_file(LTDL_H "ltdl.h")
+  if(LTDL_LIB AND LTDL_H)
+    message(STATUS "ltdl found")
+
+    get_filename_component(LTDL_H_INCLUDE_DIR "${LTDL_H}" DIRECTORY)
+    string(FIND "${CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES}" "${LTDL_H_INCLUDE_DIR}" LTPOSITION)
+    # include the directory of ltdl.h, if its not in the default system include dirs
+    if(LTPOSITION LESS "0")
+      include_directories("${LTDL_H_INCLUDE_DIR}")
+    endif()
+
+  else()
+    message(FATAL_ERROR "Could not find LTDL library!")
+  endif()
 endif()
 
 ######################################################################################
 
-include(FindThreads)
-if(Threads_FOUND)
-  set(LD_FLAGS_BIN ${CMAKE_THREAD_LIBS_INIT})
+if (MSVC)
+  set(CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
+  find_package( PthreadsWin32 )
+  if(NOT Pthreads_FOUND)
+    message(FATAL_ERROR "Could not find pthreads-win32 libs!")
+  endif()
+  include_directories("${Pthreads_INCLUDE_DIRS}")
 else()
-  message(FATAL_ERROR "Could not find threading library for this system")
+  include(FindThreads)
+  if(Threads_FOUND)
+    set(LD_FLAGS_BIN ${CMAKE_THREAD_LIBS_INIT})
+  else()
+    message(FATAL_ERROR "Could not find threading library for this system")
+  endif()
 endif()
+
 
 ######################################################################################
 # DONE
+
+if (MSVC)
+  message(STATUS "Building ICD not yet supported on Windows.")
+  set(DEFAULT_ENABLE_ICD 0 CACHE INTERNAL "Going to use ICD loader")
+  set(DEFAULT_DIRECT_LINKAGE 1 CACHE INTERNAL "Software links directly to pocl")
+  set(DEFAULT_TESTS_USE_ICD 0 CACHE INTERNAL "Tests use ICD")
+endif()
 
 if(NOT DEFINED DEFAULT_ENABLE_ICD)
 
@@ -426,12 +531,28 @@ endif()
 ######################################################################################
 # DONE
 
-pkg_check_modules(GLEW glew)
-if(NOT GLEW_FOUND)
-  message(WARNING "libGLEW not found. A few tests will not work")
+if (MSVC)
+  message(STATUS "Finding libGLEW binary distribution (http://glew.sourceforge.net/index.html) for Widows not implemented. Consider writing FindGlew.cmake macro.")
+  message(STATUS "libGLEW not found. A few tests will not work")
 else()
-  set(HAVE_GLEW 1)
+  pkg_check_modules(GLEW glew)
+  if(NOT GLEW_FOUND)
+    message(WARNING "libGLEW not found. A few tests will not work")
+  else()
+    set(HAVE_GLEW 1)
+  endif()
 endif()
+
+######################################################################################
+# DONE
+
+option(KERNEL_CACHE "Enable the kernel compile cache." ON)
+if(KERNEL_CACHE)
+  set(POCL_BUILD_KERNEL_CACHE 1)
+else()
+  set(POCL_BUILD_KERNEL_CACHE 0)
+endif()
+string(TIMESTAMP POCL_BUILD_TIMESTAMP "%d%m%Y%H%M%S")
 
 ######################################################################################
 # DONE
@@ -662,9 +783,14 @@ set(SRCDIR "${CMAKE_SOURCE_DIR}")
 include(CheckSymbolExists)
 CHECK_SYMBOL_EXISTS("posix_memalign" "stdlib.h" HAVE_POSIX_MEMALIGN)
 
-#AC_C_BIGENDIAN
-include(TestBigEndian)
-TEST_BIG_ENDIAN(WORDS_BIGENDIAN)
+if(NOT CMAKE_CROSSCOMPILING)
+  # AC_C_BIGENDIAN
+  include(TestBigEndian)
+  TEST_BIG_ENDIAN(WORDS_BIGENDIAN)
+else()
+  # Set default as little-endian
+  set(WORDS_BIGENDIAN 0)
+endif()
 
 ##########################################################
 
@@ -747,9 +873,9 @@ endif()
 # 4:0:3 == 0.10 (currently backwards compatible with 0.7, thus age = 3).
 
 
-set(LIB_CURRENT_VERSION 4)
+set(LIB_CURRENT_VERSION 5)
 set(LIB_REVISION_VERSION 0)
-set(LIB_AGE_VERSION 3)
+set(LIB_AGE_VERSION 4)
 
 # LIB_FIRST_VERSION=$(($LIB_CURRENT_VERSION - $LIB_AGE_VERSION))
 math(EXPR LIB_FIRST_VERSION "${LIB_CURRENT_VERSION} - ${LIB_AGE_VERSION}")
@@ -767,7 +893,7 @@ set(LIB_API_VERSION "${LIB_FIRST_VERSION}")
 
 # DONE - lib/llvmopencl..
 # AC_SUBST([KERNEL_COMPILER_LIB_VERSION], ["3:0:0"])
-set(KERNEL_COMPILER_LIB_VERSION "3.0.0")
+set(KERNEL_COMPILER_LIB_VERSION "${LIB_CURRENT_VERSION}.0.0")
 
 ##########################################################
 
@@ -855,6 +981,8 @@ add_subdirectory("tests")
 set(ALL_TESTSUITES "AMD;AMDSDK2.9;opencl-book-samples;Parboil;piglit;Rodinia;VexCL;ViennaCL")
 add_subdirectory("examples")
 
+add_custom_target(check COMMAND ${CMAKE_CTEST_COMMAND})
+
 ##########################################################
 
 MESSAGE(STATUS " ")
@@ -886,6 +1014,7 @@ MESSAGE(STATUS "ENABLE_ICD: ${ENABLE_ICD}")
 MESSAGE(STATUS "ENABLE_SPU (Cell SPU enabled): ${ENABLE_SPU}")
 MESSAGE(STATUS "ENABLE_TCE: ${ENABLE_TCE}")
 MESSAGE(STATUS "ENABLE_TCEMC: ${ENABLE_TCEMC}")
+MESSAGE(STATUS "HAVE_CLOCK_GETTIME: ${HAVE_CLOCK_GETTIME}")
 MESSAGE(STATUS "HAVE_GLEW: ${HAVE_GLEW}")
 MESSAGE(STATUS "HAVE_OPENCL_HPP: ${HAVE_OPENCL_HPP}")
 MESSAGE(STATUS "INSTALL_OPENCL_HEADERS (Install our headers): ${INSTALL_OPENCL_HEADERS}")
@@ -897,6 +1026,7 @@ MESSAGE(STATUS "TESTS_USE_ICD: ${TESTS_USE_ICD}")
 MESSAGE(STATUS "USE_VECMATHLIB: ${USE_VECMATHLIB}")
 MESSAGE(STATUS "Available testsuites: ${ALL_TESTSUITES}")
 MESSAGE(STATUS "Enabled testsuites: ${ENABLED_TESTSUITES}")
+MESSAGE(STATUS "Kernel caching: ${KERNEL_CACHE}")
 
 MESSAGE(STATUS " ")
 MESSAGE(STATUS "******* Programs:")
@@ -938,9 +1068,20 @@ MESSAGE(STATUS "LLVM_CPPFLAGS: ${LLVM_CPPFLAGS}")
 MESSAGE(STATUS "LLVM_LDFLAGS: ${LLVM_LDFLAGS}")
 MESSAGE(STATUS "LLVM_LIBDIR: ${LLVM_LIBDIR}")
 MESSAGE(STATUS "LLVM_INCLUDEDIR: ${LLVM_INCLUDEDIR}")
+MESSAGE(STATUS "LLVM_SRC_ROOT: ${LLVM_SRC_ROOT}")
+MESSAGE(STATUS "LLVM_OBJ_ROOT: ${LLVM_OBJ_ROOT}")
+MESSAGE(STATUS "LLVM_INCLUDE_DIRS: ${LLVM_INCLUDE_DIRS}")
+MESSAGE(STATUS "LLVM_SYSLIBS: ${LLVM_SYSLIBS}")
 # these are a bit too long..
-#MESSAGE(STATUS "LLVM_LIBS: ${LLVM_LIBS}")
-#MESSAGE(STATUS "LLVM_LIBFILES: ${LLVM_LIBFILES}")
+MESSAGE(STATUS "----------- CLANG_SHARED_LIBS --------")
+MESSAGE(STATUS "${CLANG_SHARED_LIBS}")
+MESSAGE(STATUS "----------- CLANG_STATIC_LIBS --------")
+MESSAGE(STATUS "${CLANG_STATIC_LIBS}")
+MESSAGE(STATUS "----------- LLVM_LIBS (LLVM SHARED LIBS) --------")
+MESSAGE(STATUS "${LLVM_LIBS}")
+MESSAGE(STATUS "----------- LLVM_LIBFILES (LLVM STATIC LIBS) --------")
+MESSAGE(STATUS "${LLVM_LIBFILES}")
+MESSAGE(STATUS "----------- -------------------------------- --------")
 MESSAGE(STATUS "LLVM_ALL_TARGETS: ${LLVM_ALL_TARGETS}")
 MESSAGE(STATUS "LLVM_HOST_TARGET: ${LLVM_HOST_TARGET}")
 MESSAGE(STATUS "LLC_TRIPLE: ${LLC_TRIPLE}")

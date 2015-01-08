@@ -28,7 +28,11 @@
 #include "config.h"
 #include <assert.h>
 #include <stdio.h>
-#include <ltdl.h>
+#ifndef _MSC_VER
+#  include <ltdl.h>
+#else
+#  include "vccompat.hpp"
+#endif
 
 #if defined(BUILD_HPX)
     #include "hpx-threads/hpx_c_spinlock.h" 
@@ -36,11 +40,17 @@
     #include <pthread.h>
 #endif
 
+
+#ifdef HAVE_CLOCK_GETTIME
+#include <time.h>
+#endif
+
 #define CL_USE_DEPRECATED_OPENCL_1_1_APIS
 #ifdef BUILD_ICD
 #  include "pocl_icd.h"
 #endif
 #include "pocl.h"
+#include "pocl_hash.h"
 
 #define POCL_FILENAME_LENGTH 1024
 
@@ -54,7 +64,9 @@
 #define POCL_PROGRAM_BC_FILENAME "program.bc"
 /* The filename in which the work group (parallelizable) kernel LLVM bc is stored in 
    the kernel's temp dir. */
-#define POCL_PARALLEL_BC_FILENAME "parallel.bc"
+#define POCL_PARALLEL_BC_FILENAME   "parallel.bc"
+#define POCL_BUILDLOG_FILENAME      "build.log"
+#define POCL_LAST_ACCESSED_FILENAME "last_accessed"
 
 #if __STDC_VERSION__ < 199901L
 # if __GNUC__ >= 2
@@ -73,9 +85,9 @@
 /* Debugging macros. Also macros for marking unimplemented parts of specs or
    untested parts of the implementation. */
 
-#define POCL_ABORT_UNIMPLEMENTED()                                      \
+#define POCL_ABORT_UNIMPLEMENTED(MSG)                                   \
     do {                                                                \
-        fprintf(stderr, "pocl error: encountered unimplemented part of the OpenCL specs in %s:%d\n", __FILE__, __LINE__); \
+        fprintf(stderr,"%s is unimplemented (%s:%d)\n", MSG, __FILE__, __LINE__);  \
         exit(2);                                                        \
     } while (0) 
 
@@ -97,6 +109,93 @@
 
 #define POCL_ERROR(x) do { if (errcode_ret != NULL) {*errcode_ret = (x); } return NULL; } while (0)
 #define POCL_SUCCESS() do { if (errcode_ret != NULL) {*errcode_ret = CL_SUCCESS; } } while (0)
+
+
+#ifdef POCL_DEBUG_MESSAGES
+
+extern int pocl_debug_messages;
+
+  #ifdef HAVE_CLOCK_GETTIME
+
+  extern struct timespec pocl_debug_timespec;
+  #define POCL_MSG_PRINT_INFO(...)                                            \
+    do {                                                                      \
+    if (pocl_debug_messages) {                                                \
+      clock_gettime(CLOCK_REALTIME, &pocl_debug_timespec);                    \
+      fprintf(stderr, "[%li.%li] POCL: in function %s"                  \
+      " at line %u:", (long)pocl_debug_timespec.tv_sec, (long)pocl_debug_timespec.tv_nsec, \
+        __func__, __LINE__);                                                  \
+      fprintf(stderr, __VA_ARGS__);                                           \
+    }                                                                         \
+  } while(0)
+
+  #define POCL_MSG_PRINT(TYPE, ERRCODE, ...)                                  \
+    do {                                                                      \
+    if (pocl_debug_messages) {                                                \
+      clock_gettime(CLOCK_REALTIME, &pocl_debug_timespec);                    \
+      fprintf(stderr, "[%li.%li] POCL: " TYPE ERRCODE " in function %s"       \
+      " at line %u: \n", (long)pocl_debug_timespec.tv_sec, (long)pocl_debug_timespec.tv_nsec, \
+        __func__, __LINE__);                                                  \
+      fprintf(stderr, __VA_ARGS__);                                           \
+    }                                                                         \
+  } while(0)
+
+  #else
+
+  #define POCL_MSG_PRINT(TYPE, ERRCODE, ...)                                  \
+    do {                                                                      \
+    if (pocl_debug_messages) {                                                \
+      fprintf(stderr, "** POCL ** : " TYPE ERRCODE " in function %s"          \
+      " at line %u: \n",  __func__, __LINE__);                                \
+      fprintf(stderr, __VA_ARGS__);                                           \
+    }                                                                         \
+  } while(0)
+
+  #endif
+
+
+#define POCL_MSG_WARN(...) POCL_MSG_PRINT("WARNING", "", __VA_ARGS__)
+#define POCL_MSG_ERR(...) POCL_MSG_PRINT("ERROR", "", __VA_ARGS__)
+
+#else
+
+#define POCL_MSG_WARN(...)
+#define POCL_MSG_ERR(...)
+#define POCL_MSG_PRINT(...)
+#define POCL_MSG_PRINT_INFO(...)
+
+#endif
+
+
+#define POCL_GOTO_ERROR_ON(cond, err_code, ...)                             \
+  if (cond)                                                                 \
+    {                                                                       \
+      POCL_MSG_PRINT("ERROR : ", #err_code, __VA_ARGS__);                   \
+      errcode = err_code;                                                   \
+      goto ERROR;                                                           \
+    }                                                                       \
+
+#define POCL_RETURN_ERROR_ON(cond, err_code, ...)                           \
+  if (cond)                                                                 \
+    {                                                                       \
+      POCL_MSG_PRINT("ERROR : ", #err_code, __VA_ARGS__);                   \
+      return err_code;                                                      \
+    }                                                                       \
+
+#define POCL_RETURN_ERROR_COND(cond, err_code)                              \
+  if (cond)                                                                 \
+    {                                                                       \
+      POCL_MSG_PRINT("ERROR : ", #err_code, "%s\n", #cond);                 \
+      return err_code;                                                      \
+    }                                                                       \
+
+#define POCL_GOTO_ERROR_COND(cond, err_code)                                \
+  if (cond)                                                                 \
+    {                                                                       \
+      POCL_MSG_PRINT("ERROR : ", #err_code, "%s\n", #cond);                 \
+      errcode = err_code;                                                   \
+      goto ERROR;                                                           \
+    }                                                                       \
 
 /* Generic functionality for handling different types of 
    OpenCL (host) objects. */
@@ -157,6 +256,12 @@
     (__OBJ__)->pocl_refcount = 1;                  \
   } while (0)
 
+#define POCL_MEM_FREE(F_PTR)                      \
+  do {                                            \
+      free((F_PTR));                              \
+      (F_PTR) = NULL;                             \
+  } while (0)
+
 #ifdef BUILD_ICD
 /* Most (all?) object must also initialize the ICD field */
 #  define POCL_INIT_OBJECT(__OBJ__)                \
@@ -187,6 +292,14 @@
 #  define POdeclsym(name)
 #  define POsym(name)
 #  define POsymAlways(name)
+
+#elif defined(_MSC_VER)
+/* Visual Studio does not support this magic either */
+#  define POname(name) name
+#  define POdeclsym(name)
+#  define POsym(name)
+#  define POsymAlways(name)
+#  define POdeclsym(name)
 
 #else
 /* Symbol aliases are supported */
@@ -318,6 +431,8 @@ void (*fill_rect) (void *data,
   (void *data, 
    const char *dev_tmpdir);
 
+  void (*build_hash) (void *data, SHA1_CTX *build_hash);
+
     /* return supported image formats */
   cl_int (*get_supported_image_formats) (cl_mem_flags flags,
                                          const cl_image_format **image_formats,
@@ -390,6 +505,8 @@ struct _cl_device_id {
   size_t printf_buffer_size;
   char *short_name;
   char *long_name;
+  char *cache_dir_name;
+  cl_device_id parent_device;
 
   char *vendor;
   char *driver_version;
@@ -506,12 +623,16 @@ struct _cl_program {
      sequential bitcode produced from the kernel sources.*/
   size_t *binary_sizes; 
   unsigned char **binaries; 
-  /* Temp directory (relative to CWD) where the kernel files reside. */
-  char *temp_dir;
+  /* Cache directory where program files will reside. */
+  char *cache_dir;
   /* implementation */
   cl_kernel kernels;
+  /* program hash after build */
+  uint8_t build_hash[SHA1_DIGEST_SIZE];
   /* Used to store the llvm IR of the build to save disk I/O. */
   void **llvm_irs;
+  /* Use to store build status */
+  cl_build_status build_status;
 };
 
 struct _cl_kernel {
@@ -541,7 +662,7 @@ struct event_callback_item
   void (*callback_function) (cl_event, cl_int, void*);
   void *user_data;
   cl_int trigger_status;
-  void *next;
+  struct event_callback_item *next;
 };
 
 typedef struct _cl_event _cl_event;
@@ -626,5 +747,5 @@ struct _cl_sampler {
 
 #define min(a,b) (((a) < (b)) ? (a) : (b))
 #define max(a,b) (((a) > (b)) ? (a) : (b))
-    
+
 #endif /* POCL_CL_H */

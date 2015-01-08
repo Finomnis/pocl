@@ -1,7 +1,7 @@
 /* pocl_llvm_api.cc: C wrappers for calling the LLVM/Clang C++ APIs to invoke
    the different kernel compilation phases.
 
-   Copyright (c) 2013 Kalle Raiskila
+   Copyright (c) 2013 Kalle Raiskila 
                  2013-2014 Pekka Jääskeläinen
    
    Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -34,7 +34,7 @@
 #include "llvm/Bitcode/ReaderWriter.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
-#if (defined LLVM_3_2 or defined LLVM_3_3 or defined LLVM_3_4)
+#if (defined LLVM_3_2 || defined LLVM_3_3 || defined LLVM_3_4)
 #include "llvm/Linker.h"
 #else
 #include "llvm/Linker/Linker.h"
@@ -78,6 +78,10 @@
 #include <sstream>
 #include <string>
 
+#ifndef _MSC_VER
+#  include <unistd.h>
+#endif
+
 // Note - LLVM/Clang uses symbols defined in Khronos' headers in macros, 
 // causing compilation error if they are included before the LLVM headers.
 #include "pocl_llvm.h"
@@ -85,6 +89,7 @@
 #include "install-paths.h"
 #include "LLVMUtils.h"
 #include "linker.h"
+#include "pocl_util.h"
 
 using namespace clang;
 using namespace llvm;
@@ -120,6 +125,8 @@ LLVMContext *GlobalContext() {
 
 static llvm::sys::Mutex kernelCompilerLock;
 
+static void InitializeLLVM();
+
 //#define DEBUG_POCL_LLVM_API
 
 #if defined(DEBUG_POCL_LLVM_API) && defined(NDEBUG)
@@ -135,9 +142,14 @@ static inline void
 write_temporary_file( const llvm::Module *mod,
                       const char *filename )
 {
-  std::string ErrorInfo;
   tool_output_file *Out;
+  #if LLVM_VERSION_MAJOR==3 && LLVM_VERSION_MINOR<6
+  std::string ErrorInfo;
   Out = new tool_output_file(filename, ErrorInfo, F_Binary);
+  #else
+  std::error_code ErrorInfo;
+  Out = new tool_output_file(filename, ErrorInfo, F_Binary);
+  #endif
   WriteBitcodeToFile(mod, Out->os());
   Out->keep();
   delete Out;
@@ -150,11 +162,11 @@ write_temporary_file( const llvm::Module *mod,
 // to find it.
 static inline int
 load_source(FrontendOptions &fe,
-            const char* temp_dir,
+            const char* cache_dir,
             cl_program program)
 {
-  std::string kernel_file(temp_dir);
-  kernel_file += POCL_PROGRAM_CL_FILENAME;
+  std::string kernel_file(cache_dir);
+  kernel_file += "/" POCL_PROGRAM_CL_FILENAME;
   std::ofstream ofs(kernel_file.c_str());
   ofs << program->source;
   if (!ofs.good())
@@ -165,16 +177,28 @@ load_source(FrontendOptions &fe,
   return 0;
 }
 
+// Compatibility function: this function existed up to LLVM 3.5
+// With 3.6 its name & signature changed
+#if !(defined LLVM_3_2 || defined LLVM_3_3 || \
+      defined LLVM_3_4 || defined LLVM_3_5)
+static llvm::Module*
+ParseIRFile(const char* fname, SMDiagnostic &Err, llvm::LLVMContext &ctx)
+{
+    return parseIRFile(fname, Err, ctx).release();
+}
+#endif
+
 int pocl_llvm_build_program(cl_program program, 
                             cl_device_id device, 
                             int device_i,     
-                            const char* temp_dir,
+                            const char* cache_dir,
                             const char* binary_file_name,
                             const char* device_tmpdir,
                             const char* user_options)
 
-{ 
+{
   llvm::MutexGuard lockHolder(kernelCompilerLock);
+  InitializeLLVM();
 
   // Use CompilerInvocation::CreateFromArgs to initialize
   // CompilerInvocation. This way we can reuse the Clang's
@@ -193,6 +217,13 @@ int pocl_llvm_build_program(cl_program program,
 
   // add device specific switches, if any
   std::stringstream ss;
+  std::stringstream ss_build_log;
+
+  std::stringstream build_log_filename;
+  build_log_filename << cache_dir << "/" << POCL_BUILDLOG_FILENAME;
+  /* Overwrite build log */
+  std::ofstream fp(build_log_filename.str().c_str(), std::ofstream::trunc);
+  fp.close();
 
   if (device->ops->init_build != NULL) 
     {
@@ -203,7 +234,7 @@ int pocl_llvm_build_program(cl_program program,
         {
           ss << device_switches << " ";
         }
-      free (device_switches);
+      POCL_MEM_FREE(device_switches);
     }
 
   // This can cause illegal optimizations when unaware
@@ -226,7 +257,6 @@ int pocl_llvm_build_program(cl_program program,
       have fma instructions. These ruin the performance. Better to have
       the mul+add separated in the IR. */
   ss << "-fno-builtin -ffp-contract=off ";
-
   // This is required otherwise the initialization fails with
   // unknown triplet ''
   ss << "-triple=" << device->llvm_target_triplet << " ";
@@ -263,15 +293,16 @@ int pocl_llvm_build_program(cl_program program,
       for (TextDiagnosticBuffer::const_iterator i = diagsBuffer->err_begin(), 
              e = diagsBuffer->err_end(); i != e; ++i) 
         {
-          // TODO: transfer the errors to clGetProgramBuildInfo
-          std::cerr << "error: " << (*i).second << std::endl;
+          ss_build_log << "error: " << (*i).second << std::endl;
         }
       for (TextDiagnosticBuffer::const_iterator i = diagsBuffer->warn_begin(), 
              e = diagsBuffer->warn_end(); i != e; ++i) 
         {
-          // TODO: transfer the warnings to clGetProgramBuildInfo
-          std::cerr << "warning: " << (*i).second << std::endl;
+          ss_build_log << "warning: " << (*i).second << std::endl;
         }
+      pocl_create_or_append_file(build_log_filename.str().c_str(),
+                                 ss_build_log.str().c_str());
+      std::cerr << ss_build_log.str();
       return CL_INVALID_BUILD_OPTIONS;
     }
   
@@ -323,23 +354,24 @@ int pocl_llvm_build_program(cl_program program,
 
   // printf("### Triple: %s, CPU: %s\n", ta.Triple.c_str(), ta.CPU.c_str());
 
-  // FIXME: print out any diagnostics to stdout for now. These should go to a buffer for the user
-  // to dig out. (and probably to stdout too, overridable with environment variables) 
 #ifdef LLVM_3_2
-  CI.createDiagnostics(0, NULL);
+  CI.createDiagnostics(0, NULL, diagsBuffer, false);
 #else
-  CI.createDiagnostics();
+  CI.createDiagnostics(diagsBuffer, false);
 #endif 
  
   FrontendOptions &fe = pocl_build.getFrontendOpts();
   // The CreateFromArgs created an stdin input which we should remove first.
   fe.Inputs.clear(); 
-  if (load_source(fe, temp_dir, program)!=0)
+  if (load_source(fe, cache_dir, program)!=0)
     return CL_OUT_OF_HOST_MEMORY;
 
   CodeGenOptions &cg = pocl_build.getCodeGenOpts();
   cg.EmitOpenCLArgMetadata = true;
   cg.StackRealignment = true;
+  // Let the vectorizer or another optimization pass unroll the loops,
+  // in case it sees beneficial.
+  cg.UnrollLoops = false;
 
   // TODO: use pch: it is possible to disable the strict checking for
   // the compilation flags used to compile it and the current translation
@@ -349,18 +381,42 @@ int pocl_llvm_build_program(cl_program program,
   clang::CodeGenAction *action = NULL;
   action = new clang::EmitLLVMOnlyAction(GlobalContext());
   success |= CI.ExecuteAction(*action);
+
+  SourceManager &source_manager = CI.getSourceManager();
+  for (TextDiagnosticBuffer::const_iterator i = diagsBuffer->err_begin(),
+       e = diagsBuffer->err_end(); i != e; ++i)
+    {
+      ss_build_log << "error: " << (*i).first.printToString(source_manager)
+                   << ": " << (*i).second << std::endl;
+    }
+  for (TextDiagnosticBuffer::const_iterator i = diagsBuffer->warn_begin(),
+       e = diagsBuffer->warn_end(); i != e; ++i)
+    {
+      ss_build_log << "warning: " << (*i).first.printToString(source_manager)
+                   << ": " << (*i).second << std::endl;
+    }
+  pocl_create_or_append_file(build_log_filename.str().c_str(),
+                                ss_build_log.str().c_str());
+  std::cerr << ss_build_log.str();
+
   // FIXME: memleak, see FIXME below
   if (!success) return CL_BUILD_PROGRAM_FAILURE;
 
   llvm::Module **mod = (llvm::Module **)&program->llvm_irs[device_i];
   if (*mod != NULL)
     delete (llvm::Module*)*mod;
+
+#if LLVM_VERSION_MAJOR==3 && LLVM_VERSION_MINOR<6
   *mod = action->takeModule();
+#else
+  *mod = action->takeModule().release();
+#endif
+
   if (*mod == NULL)
     return CL_BUILD_PROGRAM_FAILURE;
 
-  if (pocl_get_bool_option("POCL_LEAVE_TEMP_DIRS", 0))
-    write_temporary_file(*mod, binary_file_name);
+  /* Always retain program.bc. Its required in clBuildProgram */
+  write_temporary_file(*mod, binary_file_name);
 
   // FIXME: cannot delete action as it contains something the llvm::Module
   // refers to. We should create it globally, at compiler initialization time.
@@ -377,10 +433,20 @@ int pocl_llvm_get_kernel_arg_metadata(const char* kernel_name,
   // find the right kernel in "opencl.kernels" metadata
   llvm::NamedMDNode *opencl_kernels = input->getNamedMetadata("opencl.kernels");
   llvm::MDNode *kernel_metadata = NULL;
+
+  // Not sure what to do in this case
+  if (!opencl_kernels) return -1;
+
   for (unsigned i = 0, e = opencl_kernels->getNumOperands(); i != e; ++i) {
     llvm::MDNode *kernel_iter = opencl_kernels->getOperand(i);
 
+#ifdef LLVM_OLDER_THAN_3_6
     llvm::Function *kernel_prototype = llvm::cast<llvm::Function>(kernel_iter->getOperand(0));
+#else
+    llvm::Function *kernel_prototype = 
+      llvm::cast<llvm::Function>(
+        dyn_cast<llvm::ValueAsMetadata>(kernel_iter->getOperand(0))->getValue());
+#endif
     std::string name = kernel_prototype->getName().str();
     if (name == kernel_name) {
       kernel_metadata = kernel_iter;
@@ -407,17 +473,28 @@ int pocl_llvm_get_kernel_arg_metadata(const char* kernel_name,
     std::string meta_name = meta_name_node->getString().str();
 
     for (unsigned j = 1; j != arg_num; ++j) {
+#ifdef LLVM_OLDER_THAN_3_6
       llvm::Value *meta_arg_value = meta_node->getOperand(j);
+#else
+      llvm::Value *meta_arg_value = NULL;
+      if (isa<ValueAsMetadata>(meta_node->getOperand(j)))
+        meta_arg_value = 
+          dyn_cast<ValueAsMetadata>(meta_node->getOperand(j))->getValue();      
+      else if (isa<ConstantAsMetadata>(meta_node->getOperand(j)))
+        meta_arg_value = 
+          dyn_cast<ConstantAsMetadata>(meta_node->getOperand(j))->getValue(); 
+#endif
       struct pocl_argument_info* current_arg = &kernel->arg_info[j-1];
 
-      if (isa<ConstantInt>(meta_arg_value) && meta_name=="kernel_arg_addr_space") {
+      if (meta_arg_value != NULL && isa<ConstantInt>(meta_arg_value) && 
+          meta_name == "kernel_arg_addr_space") {
         assert(has_meta_for_every_arg && "kernel_arg_addr_space meta incomplete");
         kernel->has_arg_metadata |= POCL_HAS_KERNEL_ARG_ADDRESS_QUALIFIER;
         //std::cout << "is ConstantInt /  kernel_arg_addr_space" << std::endl;
         llvm::ConstantInt *m = llvm::cast<ConstantInt>(meta_arg_value);
         uint64_t val = m->getLimitedValue(UINT_MAX);
         //std::cout << "with value: " << val << std::endl;
-        if(bitcode_is_spir) {
+        if (bitcode_is_spir) {
           switch(val) {
             case 0:
               current_arg->address_qualifier = CL_KERNEL_ARG_ADDRESS_PRIVATE; break;
@@ -441,9 +518,9 @@ int pocl_llvm_get_kernel_arg_metadata(const char* kernel_name,
           }
         }
       }
-      else if (isa<MDString>(meta_arg_value)) {
+      else if (isa<MDString>(meta_node->getOperand(j))) {
         //std::cout << "is MDString" << std::endl;
-        llvm::MDString *m = llvm::cast<MDString>(meta_arg_value);
+        llvm::MDString *m = llvm::cast<MDString>(meta_node->getOperand(j));
         std::string val = m->getString().str();
         //std::cout << "with value: " << val << std::endl;
         if (meta_name == "kernel_arg_access_qual") {
@@ -502,11 +579,7 @@ int pocl_llvm_get_kernel_metadata(cl_program program,
 {
 
   int i;
-  unsigned n;
   llvm::Module *input = NULL;
-  SMDiagnostic Err;
-  FILE *binary_file;
-  char binary_filename[POCL_FILENAME_LENGTH];
   char tmpdir[POCL_FILENAME_LENGTH];
 
   assert(program->devices[device_i]->llvm_target_triplet && 
@@ -520,44 +593,20 @@ int pocl_llvm_get_kernel_metadata(cl_program program,
       printf("### use a saved llvm::Module\n");
 #endif
     }
-
-  snprintf (tmpdir, POCL_FILENAME_LENGTH, "%s/%s", 
-            device_tmpdir, kernel_name);
-  mkdir(tmpdir, S_IRWXU);
+  else
+    {
+      *errcode = CL_INVALID_PROGRAM_EXECUTABLE;
+      return 1;
+    }
 
   (void) snprintf(descriptor_filename, POCL_FILENAME_LENGTH,
                     "%s/%s/descriptor.so", device_tmpdir, kernel_name);
 
-  if (input == NULL)
-    {
-      (void) snprintf(binary_filename, POCL_FILENAME_LENGTH,
-                       "%s/kernel.bc",
-                       tmpdir);
+  snprintf(tmpdir, POCL_FILENAME_LENGTH, "%s/%s",
+            device_tmpdir, kernel_name);
 
-      binary_file = fopen(binary_filename, "w+");
-      if (binary_file == NULL)
-        return CL_OUT_OF_HOST_MEMORY;
-
-      n = fwrite(program->binaries[device_i], 1,
-                 program->binary_sizes[device_i], binary_file);
-      if (n < program->binary_sizes[device_i])
-        return CL_OUT_OF_HOST_MEMORY;
-      fclose(binary_file); 
-
-      input = ParseIRFile(binary_filename, Err, *GlobalContext());
-      if (program->llvm_irs != NULL)
-        program->llvm_irs[device_i] = input;
-      assert(&input->getContext() == GlobalContext());
-      if (!input) 
-        {
-          // TODO:
-          raw_os_ostream os(std::cout);
-          Err.print("pocl error: bad kernel file ", os);
-          os.flush();
-          exit(1);
-        }
-    }
-
+  if (access(tmpdir, F_OK) != 0)
+    mkdir(tmpdir, S_IRWXU);
 
 #ifdef DEBUG_POCL_LLVM_API        
   printf("### fetching kernel metadata for kernel %s program %p input llvm::Module %p\n",
@@ -571,7 +620,7 @@ int pocl_llvm_get_kernel_metadata(cl_program program,
   }
 
   DataLayout *TD = 0;
-#if (defined LLVM_3_2 or defined LLVM_3_3 or defined LLVM_3_4)
+#if (defined LLVM_3_2 || defined LLVM_3_3 || defined LLVM_3_4)
   const std::string &ModuleDataLayout = input->getDataLayout();
 #else
   const std::string &ModuleDataLayout = input->getDataLayout()->getStringRepresentation();
@@ -628,10 +677,10 @@ int pocl_llvm_get_kernel_metadata(cl_program program,
                                           ee = arglist.end(); 
        ii != ee ; ii++)
   {
-    Type *t = ii->getType();
+    llvm::Type *t = ii->getType();
     kernel->arg_info[i].type = POCL_ARG_TYPE_NONE;
 
-    const PointerType *p = dyn_cast<PointerType>(t);
+    const llvm::PointerType *p = dyn_cast<llvm::PointerType>(t);
     if (p && !ii->hasByValAttr()) {
       kernel->arg_info[i].type = POCL_ARG_TYPE_POINTER;
       // index 0 is for function attributes, parameters start at 1.
@@ -675,20 +724,34 @@ int pocl_llvm_get_kernel_metadata(cl_program program,
   if (size_info) {
     for (unsigned i = 0, e = size_info->getNumOperands(); i != e; ++i) {
       llvm::MDNode *KernelSizeInfo = size_info->getOperand(i);
-      if (KernelSizeInfo->getOperand(0) == kernel_function) {
-        reqdx = (llvm::cast<ConstantInt>
-                 (KernelSizeInfo->getOperand(1)))->getLimitedValue();
-        reqdy = (llvm::cast<ConstantInt>
-                 (KernelSizeInfo->getOperand(2)))->getLimitedValue();
-        reqdz = (llvm::cast<ConstantInt>
-                 (KernelSizeInfo->getOperand(3)))->getLimitedValue();
-      }
+#ifdef LLVM_OLDER_THAN_3_6
+      if (KernelSizeInfo->getOperand(0) != kernel_function) 
+        continue;
+      reqdx = (llvm::cast<ConstantInt>(KernelSizeInfo->getOperand(1)))->getLimitedValue();
+      reqdy = (llvm::cast<ConstantInt>(KernelSizeInfo->getOperand(2)))->getLimitedValue();
+      reqdz = (llvm::cast<ConstantInt>(KernelSizeInfo->getOperand(3)))->getLimitedValue();
+#else
+      if (dyn_cast<ValueAsMetadata>(
+        KernelSizeInfo->getOperand(0).get())->getValue() != kernel_function) 
+        continue;
+      reqdx = (llvm::cast<ConstantInt>(
+                 llvm::dyn_cast<ConstantAsMetadata>(
+                   KernelSizeInfo->getOperand(1))->getValue()))->getLimitedValue();
+      reqdy = (llvm::cast<ConstantInt>(
+                 llvm::dyn_cast<ConstantAsMetadata>(
+                   KernelSizeInfo->getOperand(2))->getValue()))->getLimitedValue();
+      reqdz = (llvm::cast<ConstantInt>(
+                 llvm::dyn_cast<ConstantAsMetadata>(
+                   KernelSizeInfo->getOperand(3))->getValue()))->getLimitedValue();
+#endif
+      break;
     }
   }
   kernel->reqd_wg_size[0] = reqdx;
   kernel->reqd_wg_size[1] = reqdy;
   kernel->reqd_wg_size[2] = reqdz;
   
+#ifndef POCL_ANDROID
   // Generate the kernel_obj.c file. This should be optional
   // and generated only for the heterogeneous devices which need
   // these definitions to accompany the kernels, for the launcher
@@ -697,45 +760,49 @@ int pocl_llvm_get_kernel_metadata(cl_program program,
   // gets added to this file. No checks seem to fail if that file
   // is missing though, so it is left out from there for now
   std::string kobj_s = descriptor_filename; 
-  kobj_s += ".kernel_obj.c"; 
-  FILE *kobj_c = fopen( kobj_s.c_str(), "wc");
- 
-  fprintf(kobj_c, "\n #include <pocl_device.h>\n");
+  kobj_s += ".kernel_obj.c";
 
-  fprintf(kobj_c,
-    "void _%s_workgroup(void** args, struct pocl_context*);\n", kernel_name);
-  fprintf(kobj_c,
-    "void _%s_workgroup_fast(void** args, struct pocl_context*);\n", kernel_name);
+  if(access(kobj_s.c_str(), F_OK) != 0)
+    {
+      FILE *kobj_c = fopen( kobj_s.c_str(), "wc");
 
-  fprintf(kobj_c,
-    "__attribute__((address_space(3))) __kernel_metadata _%s_md = {\n", kernel_name);
-  fprintf(kobj_c,
-    "     \"%s\", /* name */ \n", kernel_name );
-  fprintf(kobj_c,"     %d, /* num_args */\n", kernel->num_args);
-  fprintf(kobj_c,"     %d, /* num_locals */\n", kernel->num_locals);
+      fprintf(kobj_c, "\n #include <pocl_device.h>\n");
+
+      fprintf(kobj_c,
+        "void _%s_workgroup(void** args, struct pocl_context*);\n", kernel_name);
+      fprintf(kobj_c,
+        "void _%s_workgroup_fast(void** args, struct pocl_context*);\n", kernel_name);
+
+      fprintf(kobj_c,
+        "__attribute__((address_space(3))) __kernel_metadata _%s_md = {\n", kernel_name);
+      fprintf(kobj_c,
+        "     \"%s\", /* name */ \n", kernel_name );
+      fprintf(kobj_c,"     %d, /* num_args */\n", kernel->num_args);
+      fprintf(kobj_c,"     %d, /* num_locals */\n", kernel->num_locals);
 #if 0
-  // These are not used anymore. The launcher knows the arguments
-  // and sets them up, the device just obeys and launches with
-  // whatever arguments it gets. Remove if none of the private
-  // branches need them neither.
-  fprintf( kobj_c," #if _%s_NUM_LOCALS != 0\n",   kernel_name  );
-  fprintf( kobj_c,"     _%s_LOCAL_SIZE,\n",       kernel_name  );
-  fprintf( kobj_c," #else\n"    );
-  fprintf( kobj_c,"     {0}, \n"    );
-  fprintf( kobj_c," #endif\n"    );
-  fprintf( kobj_c,"     _%s_ARG_IS_LOCAL,\n",    kernel_name  );
-  fprintf( kobj_c,"     _%s_ARG_IS_POINTER,\n",  kernel_name  );
-  fprintf( kobj_c,"     _%s_ARG_IS_IMAGE,\n",    kernel_name  );
-  fprintf( kobj_c,"     _%s_ARG_IS_SAMPLER,\n",  kernel_name  );
+      // These are not used anymore. The launcher knows the arguments
+      // and sets them up, the device just obeys and launches with
+      // whatever arguments it gets. Remove if none of the private
+      // branches need them neither.
+      fprintf( kobj_c," #if _%s_NUM_LOCALS != 0\n",   kernel_name  );
+      fprintf( kobj_c,"     _%s_LOCAL_SIZE,\n",       kernel_name  );
+      fprintf( kobj_c," #else\n"    );
+      fprintf( kobj_c,"     {0}, \n"    );
+      fprintf( kobj_c," #endif\n"    );
+      fprintf( kobj_c,"     _%s_ARG_IS_LOCAL,\n",    kernel_name  );
+      fprintf( kobj_c,"     _%s_ARG_IS_POINTER,\n",  kernel_name  );
+      fprintf( kobj_c,"     _%s_ARG_IS_IMAGE,\n",    kernel_name  );
+      fprintf( kobj_c,"     _%s_ARG_IS_SAMPLER,\n",  kernel_name  );
 #endif
-  fprintf( kobj_c,"     _%s_workgroup_fast\n",   kernel_name  );
-  fprintf( kobj_c," };\n");
-  fclose(kobj_c);
+      fprintf( kobj_c,"     _%s_workgroup_fast\n",   kernel_name  );
+      fprintf( kobj_c," };\n");
+      fclose(kobj_c);
+   }
+#endif
 
   pocl_llvm_get_kernel_arg_metadata(kernel_name, input, kernel);
 
   return 0;
-  
 }
 
 /* helpers copied from LLVM opt START */
@@ -807,8 +874,21 @@ static TargetMachine* GetTargetMachine(cl_device_id device,
                                         Reloc::PIC_, CodeModel::Default,
                                         CodeGenOpt::Aggressive);
 }
-
 /* helpers copied from LLVM opt END */
+
+static void InitializeLLVM() {
+  
+  static bool LLVMInitialized = false;
+  if (LLVMInitialized) return;
+  // We have not initialized any pass managers for any device yet.
+  // Run the global LLVM pass initialization functions.
+  InitializeAllTargets();
+  InitializeAllTargetMCs();
+  InitializeAllAsmPrinters();
+  InitializeAllAsmParsers();
+
+  LLVMInitialized = true;
+}
 
 /**
  * Prepare the kernel compiler passes.
@@ -833,34 +913,26 @@ static PassManager& kernel_compiler_passes
 
   const bool first_initialization_call = kernel_compiler_passes.size() == 0;
 
+  if (first_initialization_call) {
+    // TODO: do this globally, and just once per program
+    initializeCore(Registry);
+    initializeScalarOpts(Registry);
+    initializeVectorization(Registry);
+    initializeIPO(Registry);
+    initializeAnalysis(Registry);
+    initializeIPA(Registry);
+    initializeTransformUtils(Registry);
+    initializeInstCombine(Registry);
+    initializeInstrumentation(Registry);
+    initializeTarget(Registry);
+  }
+
 #if !(defined LLVM_3_2 || defined LLVM_3_3 || defined LLVM_3_4)
-        // Scalarizer is in LLVM upstream since 3.4.
-      const bool SCALARIZE = pocl_is_option_set("POCL_SCALARIZE_KERNELS");
+  // Scalarizer is in LLVM upstream since 3.4.
+  const bool SCALARIZE = pocl_is_option_set("POCL_SCALARIZE_KERNELS");
 #else
-      const bool SCALARIZE = false;
+  const bool SCALARIZE = false;
 #endif
-
-  if (first_initialization_call) 
-    {
-      // We have not initialized any pass managers for any device yet.
-      // Run the global LLVM pass initialization functions.
-      InitializeAllTargets();
-      InitializeAllTargetMCs();
-      InitializeAllAsmPrinters();
-      InitializeAllAsmParsers();
-
-      // TODO: do this globally, and just once per program
-      initializeCore(Registry);
-      initializeScalarOpts(Registry);
-      initializeVectorization(Registry);
-      initializeIPO(Registry);
-      initializeAnalysis(Registry);
-      initializeIPA(Registry);
-      initializeTransformUtils(Registry);
-      initializeInstCombine(Registry);
-      initializeInstrumentation(Registry);
-      initializeTarget(Registry);
-    }
 
 #ifndef LLVM_3_2
   StringMap<llvm::cl::Option*> opts;
@@ -878,10 +950,12 @@ static PassManager& kernel_compiler_passes
 #endif
 
   if (module_data_layout != "") {
-#if (defined LLVM_3_2 or defined LLVM_3_3 or defined LLVM_3_4)
+#if (defined LLVM_3_2 || defined LLVM_3_3 || defined LLVM_3_4)
     Passes->add(new DataLayout(module_data_layout));
-#else
+#elif (defined LLVM_3_5)
     Passes->add(new DataLayoutPass(DataLayout(module_data_layout)));
+#else
+    Passes->add(new DataLayoutPass());
 #endif
   }
 
@@ -912,7 +986,7 @@ static PassManager& kernel_compiler_passes
      restore code (PHIs need to be at the beginning of the BB and so one cannot
      context restore them with non-PHI code if the value is needed in another PHI). */
 
-  std::vector<std::string> passes;  
+  std::vector<std::string> passes;
   passes.push_back("workitem-handler-chooser");
   passes.push_back("mem2reg");
   passes.push_back("domtree");
@@ -945,18 +1019,8 @@ static PassManager& kernel_compiler_passes
   passes.push_back("simplifycfg");
   //passes.push_back("print-module");
 
-  /* This is a beginning of the handling of the fine-tuning parameters.
-   * TODO: POCL_KERNEL_COMPILER_OPT_SWITCH
-   * TODO: POCL_VECTORIZE_WORK_GROUPS
-   * TODO: POCL_VECTORIZE_VECTOR_WIDTH
-   * TODO: POCl_VECTORIZE_NO_FP
-   */
   const std::string wg_method = 
-    pocl_get_string_option("POCL_WORK_GROUP_METHOD", "auto");
-
-  const bool wi_vectorizer = 
-    pocl_get_bool_option("POCL_VECTORIZE_WORK_GROUPS", 0);
-
+    pocl_get_string_option("POCL_WORK_GROUP_METHOD", "loopvec");
 
 #ifndef LLVM_3_2
   if (wg_method == "loopvec")
@@ -973,7 +1037,10 @@ static PassManager& kernel_compiler_passes
           // Set the options only once. TODO: fix it so that each
           // device can reset their own options. Now one cannot compile
           // with different options to different devices at one run.
-   
+
+          // LLVM inner loop vectorizer does not check whether the loop inside 
+          // another loop, in which case even a small trip count loops might be 
+          // worthwhile to vectorize.
           llvm::cl::Option *O = opts["vectorizer-min-trip-count"];
           assert(O && "could not find LLVM option 'vectorizer-min-trip-count'");
           O->addOccurrence(1, StringRef("vectorizer-min-trip-count"), StringRef("2"), false); 
@@ -991,68 +1058,36 @@ static PassManager& kernel_compiler_passes
           O = opts["debug-only"];
           assert(O && "could not find LLVM option 'debug'");
           O->addOccurrence(1, StringRef("debug-only"), StringRef("loop-vectorize"), false); 
+#endif
 
+#if !(defined LLVM_3_2 || defined LLVM_3_3 || defined LLVM_3_4)
+          if (pocl_get_bool_option("POCL_VECTORIZER_REMARKS", 0) == 1) {
+            // Enable diagnostics from the loop vectorizer.
+            O = opts["pass-remarks-missed"];
+            assert(O && "could not find LLVM option 'pass-remarks-missed'");
+            O->addOccurrence(1, StringRef("pass-remarks-missed"), StringRef("loop-vectorize"), 
+                             false); 
+
+            O = opts["pass-remarks-analysis"];
+            assert(O && "could not find LLVM option 'pass-remarks-analysis'");
+            O->addOccurrence(1, StringRef("pass-remarks-analysis"), StringRef("loop-vectorize"), 
+                             false); 
+
+            O = opts["pass-remarks"];
+            assert(O && "could not find LLVM option 'pass-remarks'");
+            O->addOccurrence(1, StringRef("pass-remarks"), StringRef("loop-vectorize"), 
+                             false); 
+          }
 #endif
         }
-      passes.push_back("mem2reg");
-      passes.push_back("loop-vectorize");
-      passes.push_back("slp-vectorizer");
+
+      llvm::cl::Option *O = opts["unroll-threshold"];
+      assert(O && "could not find LLVM option 'unroll-threshold'");
+      O->addOccurrence(1, StringRef("unroll-threshold"), StringRef("1"), false); 
     } 
-  else if (wi_vectorizer) 
-    {
-      /* The legacy repl based WI autovectorizer. Deprecated but 
-         still needed by some legacy TCE research machines. A known problem
-         is that it traverses instruction uses incorrectly, not calling getUser() 
-         like LLVM 3.5 API requires. 
-
-         All in all it is an unmaintable hack on top of an old BBVectorizer that was 
-         added for a research prototype core. We should move on towards using the
-         loop vectorizer as the main autovectorizer for a cleaner pass chain.  */
-      std::cerr << "pocl warning: wi-vectorize is deprecated and will be removed "
-                << "in pocl 0.11. It might not work correctly with LLVM 3.5.\n";
-      passes.push_back("STANDARD_OPTS");
-      passes.push_back("wi-vectorize");
-      llvm::cl::Option *O;
-      if (pocl_is_option_set("POCL_VECTORIZE_VECTOR_WIDTH") && 
-          first_initialization_call) 
-        {
-          /* The options cannot be unset, it seems, so we must set them 
-             only once, globally. TODO: check further if there is some way to
-             unset the options so we can control them per kernel compilation. */
-          O = opts["wi-vectorize-vector-width"];
-          assert(O && "could not find LLVM option 'wi-vectorize-vector-width'");
-          O->addOccurrence(1, StringRef("wi-vectorize-vector-width"), 
-                           pocl_get_string_option("POCL_VECTORIZE_VECTOR_WIDTH", "0"), false); 
-
-        }
-
-      if (pocl_get_bool_option("POCL_VECTORIZE_NO_FP", 0) && 
-          first_initialization_call) 
-        {
-          O = opts["wi-vectorize-no-fp"];
-          assert(O && "could not find LLVM option 'wi-vectorize-no-fp'");
-          O->addOccurrence(1, StringRef("wi-vectorize-no-fp"), StringRef(""), false); 
-        }
-
-      if (pocl_get_bool_option("POCL_VECTORIZE_MEM_ONLY", 0) && 
-          first_initialization_call) 
-        {
-          O = opts["wi-vectorize-mem-ops-only"];
-          assert(O && "could not find LLVM option 'wi-vectorize-mem-ops-only'");
-          O->addOccurrence(1, StringRef("wi-vectorize-mem-ops-only"), StringRef(""), false); 
-        }
-       if (first_initialization_call)
-        {
-#ifndef LLVM_3_2
-          llvm::cl::Option *O = opts["add-wi-metadata"];
-          O->addOccurrence(1, StringRef("add-wi-metadata"), 
-                           StringRef(""), false); 
-#endif
-        }
-
-    }
 #endif
 
+  passes.push_back("instcombine");
   passes.push_back("STANDARD_OPTS");
   passes.push_back("instcombine");
 
@@ -1066,6 +1101,16 @@ static PassManager& kernel_compiler_passes
           PassManagerBuilder Builder;
           Builder.OptLevel = 3;
           Builder.SizeLevel = 0;
+
+#if !(defined LLVM_3_2 || defined LLVM_3_3 || defined LLVM_3_4)
+          // These need to be setup in addition to invoking the passes
+          // to get the vectorizers initialized properly.
+          if (wg_method == "loopvec") {
+            Builder.LoopVectorize = true;
+            Builder.SLPVectorize = true;
+            Builder.BBVectorize = true;
+          }
+#endif
 
 #if defined(LLVM_3_2) || defined(LLVM_3_3)
           // SimplifyLibCalls has been removed in LLVM 3.4.
@@ -1108,6 +1153,7 @@ kernel_library
 (cl_device_id device, llvm::Module* root)
 {
   llvm::MutexGuard lockHolder(kernelCompilerLock);
+  InitializeLLVM();
 
   static std::map<cl_device_id, llvm::Module*> libs;
 
@@ -1132,7 +1178,7 @@ kernel_library
 #ifdef LLVM_3_2 
       else if (triple.getArch() == Triple::cellspu) 
         {
-          kernellib += "cellspu"; 
+          kernellib += "cellspu";
         }
 #endif
       else 
@@ -1152,7 +1198,7 @@ kernel_library
     }
 
   SMDiagnostic Err;
-  llvm::Module *lib = ParseIRFile(kernellib, Err, *GlobalContext());
+  llvm::Module *lib = ParseIRFile(kernellib.c_str(), Err, *GlobalContext());
   assert (lib != NULL);
   libs[device] = lib;
 
@@ -1169,6 +1215,7 @@ int pocl_llvm_generate_workgroup_function(cl_device_id device,
                                           const char* kernel_filename)
 {
   llvm::MutexGuard lockHolder(kernelCompilerLock);
+  InitializeLLVM();
 
 #ifdef DEBUG_POCL_LLVM_API        
   printf("### calling the kernel compiler for kernel %s local_x %zu "
@@ -1215,7 +1262,7 @@ int pocl_llvm_generate_workgroup_function(cl_device_id device,
   pocl::LocalSize.addValue(local_z);
   KernelName = kernel->name;
 
-#if (defined LLVM_3_2 or defined LLVM_3_3 or defined LLVM_3_4)
+#if (defined LLVM_3_2 || defined LLVM_3_3 || defined LLVM_3_4)
   kernel_compiler_passes(device, input->getDataLayout()).run(*input);
 #else
   kernel_compiler_passes(device,
@@ -1236,9 +1283,20 @@ int pocl_llvm_generate_workgroup_function(cl_device_id device,
   return 0;
 }
 
+void
+pocl_update_program_llvm_irs(cl_program program,
+                             cl_device_id device, const char* program_filename)
+{
+  SMDiagnostic Err;
+
+  program->llvm_irs[device->dev_id] =
+              ParseIRFile(program_filename, Err, *GlobalContext());
+}
+
 void pocl_llvm_update_binaries (cl_program program) {
 
   llvm::MutexGuard lockHolder(kernelCompilerLock);
+  InitializeLLVM();
 
   // Dump the LLVM IR Modules to memory buffers. 
   assert (program->llvm_irs != NULL);
@@ -1251,8 +1309,8 @@ void pocl_llvm_update_binaries (cl_program program) {
       assert (program->llvm_irs[i] != NULL);
 
       std::string binary_filename =
-        std::string(program->temp_dir) + "/" + 
-        program->devices[i]->short_name + "/" +
+        std::string(program->cache_dir) + "/" +
+        program->devices[i]->cache_dir_name + "/" +
         POCL_PROGRAM_BC_FILENAME;
 
       write_temporary_file((llvm::Module*)program->llvm_irs[i],
@@ -1289,6 +1347,7 @@ int
 pocl_llvm_get_kernel_names( cl_program program, const char **knames, unsigned max_num_krn )
 {
   llvm::MutexGuard lockHolder(kernelCompilerLock);
+  InitializeLLVM();
 
   // TODO: is it safe to assume every device (i.e. the index 0 here)
   // has the same set of programs & kernels?
@@ -1299,8 +1358,14 @@ pocl_llvm_get_kernel_names( cl_program program, const char **knames, unsigned ma
   unsigned i;
   for (i=0; i<md->getNumOperands(); i++) {
     assert( md->getOperand(i)->getOperand(0) != NULL);
+#ifdef LLVM_OLDER_THAN_3_6
     llvm::Function *k = cast<Function>(md->getOperand(i)->getOperand(0));
-    if (i<max_num_krn)
+#else
+    llvm::Function *k = 
+      cast<Function>(
+        dyn_cast<llvm::ValueAsMetadata>(md->getOperand(i)->getOperand(0))->getValue());
+#endif
+    if (i < max_num_krn)
       knames[i]= k->getName().data();
   }
   return i;
@@ -1315,11 +1380,15 @@ pocl_llvm_codegen(cl_kernel kernel,
                   const char *infilename,
                   const char *outfilename)
 {
-    std::string error;
     SMDiagnostic Err;
-#if defined LLVM_3_2 or defined LLVM_3_3
+#if defined LLVM_3_2 || defined LLVM_3_3
+    std::string error;
     tool_output_file outfile(outfilename, error, 0);
+#elif defined LLVM_3_4 || defined LLVM_3_5
+    std::string error;
+    tool_output_file outfile(outfilename, error, F_Binary);
 #else
+    std::error_code error;
     tool_output_file outfile(outfilename, error, F_Binary);
 #endif
     llvm::Triple triple(device->llvm_target_triplet);

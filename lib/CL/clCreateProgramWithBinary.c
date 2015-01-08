@@ -43,26 +43,19 @@ POname(clCreateProgramWithBinary)(cl_context                     context,
   int j;
   int errcode;
 
-  if (device_list == NULL || num_devices == 0 || lengths == NULL)
-    {
-      errcode = CL_INVALID_VALUE;
-      goto ERROR;
-    }
+  POCL_GOTO_ERROR_COND((context == NULL), CL_INVALID_CONTEXT);
 
-  if (context == NULL)
-    {
-      errcode = CL_INVALID_CONTEXT;
-      goto ERROR;
-    }
+  POCL_GOTO_ERROR_COND((device_list == NULL), CL_INVALID_VALUE);
+
+  POCL_GOTO_ERROR_COND((num_devices == 0), CL_INVALID_VALUE);
+
+  POCL_GOTO_ERROR_COND((lengths == NULL), CL_INVALID_VALUE);
 
   total_binary_size = 0;
   for (i = 0; i < num_devices; ++i)
     {
-      if (lengths[i] == 0 || binaries[i] == NULL)
-        {
-          errcode = CL_INVALID_VALUE;
-          goto ERROR;
-        }
+      POCL_GOTO_ERROR_ON((lengths[i] == 0 || binaries[i] == NULL), CL_INVALID_VALUE,
+        "%i-th binary is NULL or its length==0\n", i);
       total_binary_size += lengths[i];
     }
 
@@ -72,13 +65,10 @@ POname(clCreateProgramWithBinary)(cl_context                     context,
       int found = 0;
       for (j = 0; j < context->num_devices; j++)
         {
-          found |= context->devices[i] == device_list[i];
+          found |= context->devices[j] == device_list[i];
         }
-      if (!found)
-        {
-          errcode = CL_INVALID_DEVICE;
-          goto ERROR;
-        }
+      POCL_GOTO_ERROR_ON((!found), CL_INVALID_DEVICE,
+        "device not found in the device list of the context\n");
     }
   
   // check for duplicates in device_list[].
@@ -90,11 +80,8 @@ POname(clCreateProgramWithBinary)(cl_context                     context,
           count += context->devices[i] == device_list[j];
         }
       // duplicate devices
-      if (count > 1)
-        {
-          errcode = CL_INVALID_DEVICE;
-          goto ERROR;
-        }
+      POCL_GOTO_ERROR_ON((count > 1), CL_INVALID_DEVICE,
+        "device %s specified multiple times\n", context->devices[i]->long_name);
     }
   
   if ((program = (cl_program) malloc (sizeof (struct _cl_program))) == NULL)
@@ -108,16 +95,17 @@ POname(clCreateProgramWithBinary)(cl_context                     context,
   program->binaries = NULL;
   program->compiler_options = NULL;
   program->llvm_irs = NULL;
+  program->cache_dir = NULL;
 
   /* Allocate a continuous chunk of memory for all the binaries. */
-  if ((program->binary_sizes = 
+  if ((program->binary_sizes =
        (size_t*) malloc (sizeof (size_t) * num_devices)) == NULL ||
-      (program->binaries = (unsigned char**) 
+      (program->binaries = (unsigned char**)
        malloc (sizeof (unsigned char*) * num_devices)) == NULL ||
       (program->binaries[0] = (unsigned char*)
        malloc (sizeof (unsigned char) * total_binary_size)) == NULL ||
-      ((program->llvm_irs = 
-        (void**) calloc (pocl_num_devices, sizeof (void*))) == NULL))      
+      ((program->llvm_irs =
+        (void**) calloc (pocl_num_devices, sizeof (void*))) == NULL))
     {
       errcode = CL_OUT_OF_HOST_MEMORY;
       goto ERROR_CLEAN_PROGRAM_AND_BINARIES;
@@ -125,12 +113,10 @@ POname(clCreateProgramWithBinary)(cl_context                     context,
 
   program->context = context;
   program->num_devices = num_devices;
-  program->devices = malloc (sizeof(cl_device_id) * num_devices);
+  program->devices = (cl_device_id*) malloc (sizeof(cl_device_id) * num_devices);
   program->source = NULL;
   program->kernels = NULL;
-  /* Create the temporary directory where all kernel files and compilation
-     (intermediate) results are stored. */
-  program->temp_dir = pocl_create_temp_dir();
+  program->build_status = CL_BUILD_NONE;
 
   pos = program->binaries[0];
   for (i = 0; i < num_devices; ++i)
@@ -144,6 +130,7 @@ POname(clCreateProgramWithBinary)(cl_context                     context,
       if (binary_status != NULL) /* TODO: validate the binary */
         binary_status[i] = CL_SUCCESS;
     }
+
   POCL_RETAIN_OBJECT(context);
 
   if (errcode_ret != NULL)
@@ -152,14 +139,14 @@ POname(clCreateProgramWithBinary)(cl_context                     context,
 
 #if 0
 ERROR_CLEAN_PROGRAM_BINARIES_AND_DEVICES:
-  free (program->devices);
+  POCL_MEM_FREE(program->devices);
 #endif
 ERROR_CLEAN_PROGRAM_AND_BINARIES:
-  free (program->binaries[0]);
-  free (program->binaries);
-  free (program->binary_sizes);
+  POCL_MEM_FREE(program->binaries[0]);
+  POCL_MEM_FREE(program->binaries);
+  POCL_MEM_FREE(program->binary_sizes);
 /*ERROR_CLEAN_PROGRAM:*/
-  free (program);
+  POCL_MEM_FREE(program);
 ERROR:
     if(errcode_ret != NULL)
       {

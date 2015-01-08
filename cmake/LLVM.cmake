@@ -89,10 +89,13 @@ run_llvm_config(LLVM_CFLAGS --cflags)
 run_llvm_config(LLVM_CXXFLAGS --cxxflags)
 run_llvm_config(LLVM_CPPFLAGS --cppflags)
 run_llvm_config(LLVM_LDFLAGS --ldflags)
+run_llvm_config(LLVM_BINDIR --bindir)
 run_llvm_config(LLVM_LIBDIR --libdir)
 run_llvm_config(LLVM_INCLUDEDIR --includedir)
 run_llvm_config(LLVM_LIBS --libs)
 run_llvm_config(LLVM_LIBFILES --libfiles)
+run_llvm_config(LLVM_SRC_ROOT --src-root)
+run_llvm_config(LLVM_OBJ_ROOT --obj-root)
 run_llvm_config(LLVM_ALL_TARGETS --targets-built)
 run_llvm_config(LLVM_HOST_TARGET --host-target)
 # Ubuntu's llvm reports "arm-unknown-linux-gnueabihf" triple, then if one tries
@@ -101,7 +104,17 @@ run_llvm_config(LLVM_HOST_TARGET --host-target)
 # Here we replace the "arm" string with whatever's in CMAKE_HOST_SYSTEM_PROCESSOR
 # which should be "armv6l" on rasp pi, or "armv7l" on my cubieboard, hopefully its
 # more reasonable and reliable than llvm's own host flags
-string(REPLACE "arm-" "${CMAKE_HOST_SYSTEM_PROCESSOR}-" LLVM_HOST_TARGET "${LLVM_HOST_TARGET}")
+if(NOT CMAKE_CROSSCOMPILING)
+  string(REPLACE "arm-" "${CMAKE_HOST_SYSTEM_PROCESSOR}-" LLVM_HOST_TARGET "${LLVM_HOST_TARGET}")
+endif()
+
+# In windows llvm-config reports --target=x86_64-pc-windows-msvc
+# however this causes clang to use MicrosoftCXXMangler, which does not
+# yet support mangling for extended vector types (with llvm 3.5)
+# so for now hardcode LLVM_HOST_TARGET to be x86_64-pc with windows
+if(WIN32)
+  set(LLVM_HOST_TARGET "x86_64-pc")
+endif(WIN32)
 
 # required for sources..
 if(LLVM_VERSION MATCHES "3[.]([0-9]+)")
@@ -144,13 +157,61 @@ set(LLVM_CXXFLAGS "${LLVM_CXXFLAGS} -fno-rtti")
 
 if(NOT LLVM_VERSION VERSION_LESS "3.5")
   run_llvm_config(LLVM_SYSLIBS --system-libs)
-  set(LLVM_LDFLAGS "${LLVM_LDFLAGS} ${LLVM_SYSLIBS}")
 endif()
+
+# Llvm-config may be installed or it might be used from build directory, in which case
+# we need to add few extra include paths to find clang includes and compiled includes
+list(APPEND LLVM_INCLUDE_DIRS 
+  "${LLVM_INCLUDEDIR}" 
+  "${LLVM_SRC_ROOT}/tools/clang/include" 
+  "${LLVM_OBJ_ROOT}/include" 
+  "${LLVM_OBJ_ROOT}/tools/clang/include")
+
+# Convert LLVM_LIBFILES and LLVM_LIBS from string -> list format to make handling 
+# them easier (here we could also fix some parsing problems caused by spaces in path 
+# names in Windows)
+
+separate_arguments(LLVM_LIBFILES)
+separate_arguments(LLVM_LIBS)
+# Llvm-config does not include clang libs
+
+list(APPEND CLANG_LIB_NAMES 
+  clangFrontend 
+  clangDriver 
+  clangParse 
+  clangSema 
+  clangEdit 
+  clangLex 
+  clangSerialization 
+  clangBasic 
+  clangFrontendTool 
+  clangRewriteFrontend 
+  clangStaticAnalyzerFrontend 
+  clangStaticAnalyzerCore 
+  clangAnalysis 
+  clangCodeGen 
+  clangAST)
+
+# Strip -l from LLVM libnames to use list e.g. for windows build
+foreach(LIBFLAG ${LLVM_LIBS})
+  STRING(REGEX REPLACE "^-l(.*)$" "\\1" LIB_NAME ${LIBFLAG})
+  list(APPEND LLVM_LIB_NAMES "${LIB_NAME}")
+endforeach()
+
+# With Visual Studio llvm-config gives invalid list of static libs (libXXXX.a instead of XXXX.lib)
+if (MSVC)
+  SET(LLVM_MSVC_STATIC_LIB_LIST "")
+  foreach(LIBFILE ${LLVM_LIBFILES})
+    STRING(REGEX REPLACE "^(.*/)lib(.*)\\.a$" "\\1\\2.lib" STATIC_LIB_NAME ${LIBFILE})
+    list(APPEND LLVM_MSVC_STATIC_LIB_LIST "${STATIC_LIB_NAME}")
+  endforeach()
+  set(LLVM_LIBFILES ${LLVM_MSVC_STATIC_LIB_LIST})
+endif(MSVC)
 
 ####################################################################
 
 macro(find_program_or_die OUTPUT_VAR PROG_NAME DOCSTRING)
-  find_program(${OUTPUT_VAR} NAMES "${PROG_NAME}${LLVM_BINARY_SUFFIX}${CMAKE_EXECUTABLE_SUFFIX}" "${PROG_NAME}${CMAKE_EXECUTABLE_SUFFIX}" HINTS "${LLVM_CONFIG_LOCATION}" "${LLVM_PREFIX}" "${LLVM_PREFIX_BIN}" DOC "${DOCSTRING}")
+  find_program(${OUTPUT_VAR} NAMES "${PROG_NAME}${LLVM_BINARY_SUFFIX}${CMAKE_EXECUTABLE_SUFFIX}" "${PROG_NAME}${CMAKE_EXECUTABLE_SUFFIX}" HINTS "${LLVM_BINDIR}" "${LLVM_CONFIG_LOCATION}" "${LLVM_PREFIX}" "${LLVM_PREFIX_BIN}" DOC "${DOCSTRING}")
   if(${OUTPUT_VAR})
     message(STATUS "Found ${PROG_NAME}: ${${OUTPUT_VAR}}")
   else()
@@ -181,10 +242,13 @@ macro(custom_try_compile_any COMPILER SUFFIX SOURCE RES_VAR)
   set(RANDOM_FILENAME "${CMAKE_BINARY_DIR}/compile_test_${RNDNAME}.${SUFFIX}")
   file(WRITE "${RANDOM_FILENAME}" "${SOURCE}")
 
+  math(EXPR LSIZE "${ARGC} - 4")
+
   execute_process(COMMAND "${COMPILER}" ${ARGN} "${RANDOM_FILENAME}" RESULT_VARIABLE ${RES_VAR} OUTPUT_VARIABLE OV ERROR_VARIABLE EV)
   if(${${RES_VAR}})
     message(STATUS " ########## The command: ")
     message(STATUS "${COMPILER} ${ARGN} ${RANDOM_FILENAME}")
+    message(STATUS " ########## ARGN size: ${LSIZE}")
     message(STATUS " ########## Exited with nonzero status: ${${RES_VAR}}")
     if(OV)
       message(STATUS "STDOUT: ${OV}")
@@ -218,17 +282,19 @@ macro(custom_try_compile_clangxx SOURCE1 SOURCE2 RES_VAR)
 endmacro()
 
 # clang try-compile-run macro, running via native executable
-macro(custom_try_run_exe SOURCE1 SOURCE2 OUTPUT_VAR)
+macro(custom_try_run_exe SOURCE1 SOURCE2 OUTPUT_VAR RES_VAR)
   set(OUTF "${CMAKE_BINARY_DIR}/try_run${CMAKE_EXECUTABLE_SUFFIX}")
   if(EXISTS "${OUTF}")
     file(REMOVE "${OUTF}")
   endif()
   custom_try_compile_c_cxx("${CLANG}" "c" "${SOURCE1}" "${SOURCE2}" RESV "-o" "${OUTF}" "-x" "c")
   set(${OUTPUT_VAR} "")
+  set(${RES_VAR} "")
   if(RESV OR (NOT EXISTS "${OUTF}"))
     message(STATUS " ########## Compilation failed")
   else()
     execute_process(COMMAND "${OUTF}" RESULT_VARIABLE RESV OUTPUT_VARIABLE ${OUTPUT_VAR} ERROR_VARIABLE EV)
+    set(${RES_VAR} ${RESV})
     file(REMOVE "${OUTF}")
     if(${RESV})
       message(STATUS " ########## Running ${OUTF}")
@@ -244,7 +310,7 @@ macro(custom_try_run_exe SOURCE1 SOURCE2 OUTPUT_VAR)
 endmacro()
 
 # clang try-compile-run macro, run via lli, the llvm interpreter
-macro(custom_try_run_lli SOURCE1 SOURCE2 OUTPUT_VAR)
+macro(custom_try_run_lli SOURCE1 SOURCE2 OUTPUT_VAR RES_VAR)
 # this uses "lli" - the interpreter, so we can run any -target
 # TODO variable for target !!
   set(OUTF "${CMAKE_BINARY_DIR}/try_run.bc")
@@ -253,13 +319,15 @@ macro(custom_try_run_lli SOURCE1 SOURCE2 OUTPUT_VAR)
   endif()
   custom_try_compile_c_cxx("${CLANG}" "c" "${SOURCE1}" "${SOURCE2}" RESV "-o" "${OUTF}" "-x" "c" "-emit-llvm" "-c" ${ARGN})
   set(${OUTPUT_VAR} "")
+  set(${RES_VAR} "")
   if(RESV OR (NOT EXISTS "${OUTF}"))
     message(STATUS " ########## Compilation failed")
   else()
-    execute_process(COMMAND "${LLVM_LLI}" "${OUTF}" RESULT_VARIABLE RESV OUTPUT_VARIABLE ${OUTPUT_VAR} ERROR_VARIABLE EV)
+    execute_process(COMMAND "${LLVM_LLI}" "-force-interpreter" "${OUTF}" RESULT_VARIABLE RESV OUTPUT_VARIABLE ${OUTPUT_VAR} ERROR_VARIABLE EV)
+    set(${RES_VAR} ${RESV})
     file(REMOVE "${OUTF}")
     if(${RESV})
-      message(STATUS " ########## The command ${OUTF}")
+      message(STATUS " ########## The command ${LLVM_LLI} -force-interpreter ${OUTF}")
       message(STATUS " ########## Exited with nonzero status: ${RESV}")
       if(${${OUTPUT_VAR}})
         message(STATUS " ########## STDOUT: ${${OUTPUT_VAR}}")
@@ -323,7 +391,7 @@ macro(CHECK_SIZEOF TYPE RES_VAR TRIPLE)
   setup_cache_var_name(SIZEOF "${TYPE}-${TRIPLE}-${CLANG}")
 
   if(NOT DEFINED ${CACHE_VAR_NAME})
-    custom_try_run_exe("#include <stddef.h>\n #include <stdio.h>" "printf(\"%i\",(int)sizeof(${TYPE})); return 0;" ${RES_VAR} "${CLANG_TARGET_OPTION}${TRIPLE}")
+    custom_try_run_lli("" "return sizeof(${TYPE});" SIZEOF_STDOUT ${RES_VAR} "${CLANG_TARGET_OPTION}${TRIPLE}")
     if(NOT ${RES_VAR})
       message(SEND_ERROR "Could not determine sizeof(${TYPE})")
     endif()
@@ -337,18 +405,14 @@ macro(CHECK_ALIGNOF TYPE TYPEDEF RES_VAR TRIPLE)
 
   if(NOT DEFINED ${CACHE_VAR_NAME})
 
-    custom_try_run_exe("
-#include <stddef.h>
-#include <stdio.h>
-
+    custom_try_run_lli("
 #ifndef offsetof
 #define offsetof(type, member) ((char *) &((type *) 0)->member - (char *) 0)
 #endif
 
-${TYPEDEF}"  "typedef struct { char x; ${TYPE} y; } ac__type_alignof_;
+${TYPEDEF}" "typedef struct { char x; ${TYPE} y; } ac__type_alignof_;
     int r = offsetof(ac__type_alignof_, y);
-    printf(\"%i\",r);
-    return 0;" ${RES_VAR} "${CLANG_TARGET_OPTION}${TRIPLE}")
+    return r;" SIZEOF_STDOUT ${RES_VAR} "${CLANG_TARGET_OPTION}${TRIPLE}")
 
     if(NOT ${RES_VAR})
       message(SEND_ERROR "Could not determine align of(${TYPE})")
@@ -360,8 +424,9 @@ ${TYPEDEF}"  "typedef struct { char x; ${TYPE} y; } ac__type_alignof_;
 endmacro()
 
 ####################################################################
-
-# clangxx works check
+#
+# clangxx works check 
+#
 
 if(CLANGXX)
 
@@ -370,14 +435,29 @@ if(CLANGXX)
   setup_cache_var_name(CLANGXX_WORKS "${LLVM_HOST_TARGET}-${CLANGXX}-${LLVM_CLANGXX_VERSION}")
 
   if(NOT DEFINED ${CACHE_VAR_NAME})
-    set(CLANGXX_WORKS 1)
-    custom_try_compile_clangxx("namespace std { class type_info; } \n  #include <iostream>" "std::cout << \"Hello clang++ world!\" << std::endl;" COMPILE_RESULT)
-    if(COMPILE_RESULT)
-      set(CLANGXX_WORKS 0)
+    set(CLANGXX_WORKS 0)
+
+    custom_try_compile_clangxx("namespace std { class type_info; } \n  #include <iostream>" "std::cout << \"Hello clang++ world!\" << std::endl;" _STATUS_FAIL)
+
+    if(NOT _STATUS_FAIL)
+      set(CLANGXX_STDLIB "")
+      set(CLANGXX_WORKS 1)
+    else()
+      custom_try_compile_clangxx("namespace std { class type_info; } \n  #include <iostream>" "std::cout << \"Hello clang++ world!\" << std::endl;" _STATUS_FAIL "-stdlib=libstdc++")
+      if (NOT _STATUS_FAIL)
+        set(CLANGXX_STDLIB "-stdlib=libstdc++")
+        set(CLANGXX_WORKS 1)
+      else()
+        custom_try_compile_clangxx("namespace std { class type_info; } \n  #include <iostream>" "std::cout << \"Hello clang++ world!\" << std::endl;" _STATUS_FAIL "-stdlib=libc++")
+        if(NOT _STATUS_FAIL)
+          set(CLANGXX_STDLIB "-stdlib=libc++")
+          set(CLANGXX_WORKS 1)
+        endif()
+      endif()
     endif()
   endif()
 
-  set_cache_var(CLANGXX_WORKS "Clang++ works")
+  set_cache_var(CLANGXX_WORKS "Clang++ works with ${CLANGXX_STDLIB}")
 
 else()
 
@@ -386,60 +466,48 @@ else()
 endif()
 
 ####################################################################
-
-# which C++ stdlib clang is using
-
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-
-  setup_cache_var_name(SYSTEM_CLANGXX_STDLIB "${LLVM_HOST_TARGET}-${CLANGXX}-${LLVM_CLANGXX_VERSION}")
-
-  if(NOT DEFINED ${CACHE_VAR_NAME})
-    message(STATUS "Checking if system clang++ uses libstdc++")
-    separate_arguments(_FLAGS UNIX_COMMAND "${LLVM_CXXFLAGS}")
-    custom_try_compile_clangxx("#include <llvm/Support/Debug.h>\n#include <iostream>\nusing namespace std;\n"
-        "cout << 234134; return 0;" COMPILE_RESULT ${_FLAGS} "-stdlib=libstdc++")
-    if(COMPILE_RESULT)
-      custom_try_compile_clangxx("#include <llvm/Support/Debug.h>\n#include <iostream>\nusing namespace std;\n"
-          "cout << 234134; return 0;" COMPILE_RESULT ${_FLAGS} "-stdlib=libc++")
-      if(COMPILE_RESULT)
-        message(FATAL_ERROR "System clang cannot compile with neither libstdc++ nor libc++; possibly missing llvm heaers?")
-      else()
-        set(SYSTEM_CLANGXX_STDLIB "-stdlib=libc++")
-      endif()
-    else()
-      set(SYSTEM_CLANGXX_STDLIB "-stdlib=libstdc++")
-    endif()
-  endif()
-
-  set_cache_var(SYSTEM_CLANGXX_STDLIB "Clang's c++ stdlib")
-  set(LLVM_CXXFLAGS "${LLVM_CXXFLAGS} ${SYSTEM_CLANGXX_STDLIB}")
-endif()
-
-if("${SYSTEM_CLANGXX_STDLIB}" MATCHES "libc")
-  set(LLVM_LDFLAGS "${LLVM_LDFLAGS} -lc++")
-else()
-  set(LLVM_LDFLAGS "${LLVM_LDFLAGS} -lstdc++")
-endif()
-
-
-####################################################################
-
+#
 # - '-DNDEBUG' is a work-around for llvm bug 18253
-
+#
 # llvm-config does not always report the "-DNDEBUG" flag correctly
 # (see LLVM bug 18253). If LLVM and the pocl passes are built with
 # different NDEBUG settings, problems arise
+#
+# TODO: How this test should actually recognize, if llvm
+#       is built without assertions? On OSX this always
+#       passed and thinks there is no assertions...
 
 if(NOT LLVM_CXXFLAGS MATCHES "-DNDEBUG")
 
   message(STATUS "Checking if LLVM is built with assertions")
   separate_arguments(_FLAGS UNIX_COMMAND "${LLVM_CXXFLAGS}")
-  custom_try_compile_clangxx("#include <llvm/Support/Debug.h>" "llvm::DebugFlag=true;" COMPILE_RESULT ${_FLAGS} "-UNDEBUG")
-  if(COMPILE_RESULT)
+
+  SET (_TEST_SOURCE "${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/llvmbuiltwithassertions.cc")
+  FILE (WRITE "${_TEST_SOURCE}"
+    "
+      #include <llvm/Support/Debug.h>
+      int main(int argc, char** argv) {
+        llvm::DebugFlag=true;
+      }
+    ")
+
+  set(TRY_COMPILE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${LLVM_CXXFLAGS} -UNDEBUG")
+
+  TRY_COMPILE(_TRY_SUCCESS ${CMAKE_BINARY_DIR} "${_TEST_SOURCE}"
+    CMAKE_FLAGS "-DINCLUDE_DIRECTORIES:STRING=${LLVM_INCLUDE_DIRS}"
+    CMAKE_FLAGS "-DLINK_DIRECTORIES:STRING=${LLVM_LIBDIR}"
+    LINK_LIBRARIES "${LLVM_LIBS} ${LLVM_SYSLIBS}"
+    COMPILE_DEFINITIONS ${TRY_COMPILE_CXX_FLAGS}
+    OUTPUT_VARIABLE _TRY_COMPILE_OUTPUT
+  )
+
+  FILE(APPEND "${CMAKE_BINARY_DIR}/CMakeFiles/CMakeOutput.log"
+    "Test -NDEBUG flag: ${_TRY_COMPILE_OUTPUT}\n")
+
+  if(_TRY_SUCCESS)
     message(STATUS "no assertions... adding -DNDEBUG")
     set(LLVM_CXXFLAGS "${LLVM_CXXFLAGS} -DNDEBUG")
   endif()
-  unset(_FLAGS)
 
 endif()
 
@@ -465,7 +533,10 @@ setup_cache_var_name(LLC_TRIPLE "LLC_TRIPLE-${LLVM_HOST_TARGET}-${CLANG}")
 
 if(NOT DEFINED ${CACHE_VAR_NAME})
   message(STATUS "Find out LLC target triple (for host ${LLVM_HOST_TARGET})")
-  execute_process(COMMAND ${CLANG} "${CLANG_TARGET_OPTION}${LLVM_HOST_TARGET}" -x c /dev/null -S -emit-llvm -o - RESULT_VARIABLE RES_VAR OUTPUT_VARIABLE OUTPUT_VAR)
+  SET (_EMPTY_C_FILE "${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/tripletfind.c")
+  FILE (WRITE "${_EMPTY_C_FILE}" "")
+
+  execute_process(COMMAND ${CLANG} "${CLANG_TARGET_OPTION}${LLVM_HOST_TARGET}" -x c ${_EMPTY_C_FILE} -S -emit-llvm -o - RESULT_VARIABLE RES_VAR OUTPUT_VARIABLE OUTPUT_VAR)
   if(RES_VAR)
     message(FATAL_ERROR "Error ${RES_VAR} while determining target triple")
   endif()
@@ -486,7 +557,7 @@ set_cache_var(LLC_TRIPLE "LLC_TRIPLE")
 
 setup_cache_var_name(LLC_HOST_CPU "LLC_HOST_CPU-${LLVM_HOST_TARGET}-${LLC}")
 
-if(NOT DEFINED ${CACHE_VAR_NAME})
+if(NOT DEFINED ${CACHE_VAR_NAME} AND NOT CMAKE_CROSSCOMPILING)
   message(STATUS "Find out LLC host CPU with ${LLC}")
   execute_process(COMMAND ${LLC} "--version" RESULT_VARIABLE RES_VAR OUTPUT_VARIABLE OUTPUT_VAR)
   # WTF, ^^ has return value 1
@@ -550,7 +621,6 @@ if(NOT DEFINED ${CACHE_VAR_NAME})
   # TODO -march=CPU flags !
   custom_try_compile_any("${CLANG}" "cl" "constant int test[sizeof(long)==8?1:-1]={1};" RESV  -x cl -S ${CLANG_TARGET_OPTION}${LLC_TRIPLE} ${CLANG_MARCH_FLAG}${LLC_HOST_CPU})
   if(RESV)
-    message(STATUS "Your llvm has the Open-CL-C-long-is-not-8-bytes bug; disabling cl_khr_int64 on host based devices.")
     set(CL_DISABLE_LONG 1)
   endif()
 endif()
@@ -567,7 +637,6 @@ if(NOT DEFINED ${CACHE_VAR_NAME})
   # TODO -march=CPU flags !
   custom_try_compile_c_cxx("${CLANG}" "c" "__fp16 callfp16(__fp16 a) { return a * (__fp16)1.8; };" "__fp16 x=callfp16((__fp16)argc);" RESV -c ${CLANG_TARGET_OPTION}${LLC_TRIPLE} ${CLANG_MARCH_FLAG}${LLC_HOST_CPU})
   if(RESV)
-    message(STATUS "Disabling cl_khr_fp16, seems your system doesnt support it")
     set(CL_DISABLE_HALF 1)
   endif()
 endif()

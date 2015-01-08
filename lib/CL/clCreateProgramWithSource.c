@@ -33,17 +33,13 @@ POname(clCreateProgramWithSource)(cl_context context,
                           const size_t *lengths,
                           cl_int *errcode_ret) CL_API_SUFFIX__VERSION_1_0
 {
-  cl_program program;
+  cl_program program = NULL;
   unsigned size;
   char *source;
   unsigned i;
   int errcode;
 
-  if (count == 0)
-  {
-    errcode = CL_INVALID_VALUE;
-    goto ERROR;
-  }
+  POCL_GOTO_ERROR_COND((count == 0), CL_INVALID_VALUE);
 
   program = (cl_program) malloc(sizeof(struct _cl_program));
   if (program == NULL)
@@ -57,11 +53,8 @@ POname(clCreateProgramWithSource)(cl_context context,
   size = 0;
   for (i = 0; i < count; ++i)
     {
-      if (strings[i] == NULL)
-      {
-        errcode = CL_INVALID_VALUE;
-        goto ERROR_CLEAN_PROGRAM;
-      }
+      POCL_GOTO_ERROR_ON((strings[i] == NULL), CL_INVALID_VALUE,
+          "strings[%i] is NULL\n", i);
 
       if (lengths == NULL)
         size += strlen(strings[i]);
@@ -75,7 +68,7 @@ POname(clCreateProgramWithSource)(cl_context context,
   if (source == NULL)
   {
     errcode = CL_OUT_OF_HOST_MEMORY;
-    goto ERROR_CLEAN_PROGRAM;
+    goto ERROR;
   }
 
   program->source = source;
@@ -109,10 +102,8 @@ POname(clCreateProgramWithSource)(cl_context context,
   program->binaries = NULL;
   program->kernels = NULL;
   program->llvm_irs = NULL;
-
-  /* Create the temporary directory where all kernel files and compilation
-     (intermediate) results are stored. */
-  program->temp_dir = pocl_create_temp_dir();
+  program->cache_dir = NULL;
+  program->build_status = CL_BUILD_NONE;
 
   POCL_RETAIN_OBJECT(context);
 
@@ -120,9 +111,8 @@ POname(clCreateProgramWithSource)(cl_context context,
     *errcode_ret = CL_SUCCESS;
   return program;
 
-ERROR_CLEAN_PROGRAM:
-  free(program);
 ERROR:
+  POCL_MEM_FREE(program);
   if(errcode_ret)
   {
     *errcode_ret = errcode;

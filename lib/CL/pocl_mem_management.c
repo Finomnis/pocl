@@ -41,10 +41,15 @@ void pocl_init_mem_manager (void)
   static unsigned int init_done = 0;
   static pocl_lock_t pocl_init_lock = POCL_LOCK_INITIALIZER;
 
+  if(!init_done)
+    {
+      POCL_INIT_LOCK(pocl_init_lock);
+      init_done = 1;
+    }
   POCL_LOCK(pocl_init_lock);
   if (!mm)
     {
-      mm = calloc (1, sizeof (pocl_mem_manager));
+      mm = (pocl_mem_manager*) calloc (1, sizeof (pocl_mem_manager));
       POCL_INIT_LOCK (mm->event_lock);
       POCL_INIT_LOCK (mm->cmd_lock);
     }
@@ -65,7 +70,7 @@ cl_event pocl_mem_manager_new_event ()
     }
   POCL_UNLOCK (mm->event_lock);
     
-  ev = calloc (1, sizeof (struct _cl_event));
+  ev = (struct _cl_event*) calloc (1, sizeof (struct _cl_event));
   POCL_INIT_OBJECT(ev);
   ev->pocl_refcount = 1;
   return ev;
@@ -89,7 +94,7 @@ _cl_command_node* pocl_mem_manager_new_command ()
   if (cmd)
     return cmd;
   
-  return calloc (1, sizeof (_cl_command_node));
+  return (_cl_command_node*) calloc (1, sizeof (_cl_command_node));
 }
 
 void pocl_mem_manager_free_command ( _cl_command_node *cmd_ptr)

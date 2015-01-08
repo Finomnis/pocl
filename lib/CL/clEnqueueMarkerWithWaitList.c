@@ -36,8 +36,7 @@ CL_API_SUFFIX__VERSION_1_2
   int errcode;
   _cl_command_node *cmd;
   
-  if (command_queue == NULL)
-    return CL_INVALID_COMMAND_QUEUE;
+  POCL_RETURN_ERROR_COND((command_queue == NULL), CL_INVALID_COMMAND_QUEUE);
   
   errcode = pocl_create_command (&cmd, command_queue, CL_COMMAND_MARKER, 
                                  event, num_events_in_wait_list, 
@@ -51,8 +50,8 @@ CL_API_SUFFIX__VERSION_1_2
   return CL_SUCCESS;
 
  ERROR:
-  free (event); 
-  free (cmd);
+  POCL_MEM_FREE(event);
+  POCL_MEM_FREE(cmd);
   return errcode;
 
 }

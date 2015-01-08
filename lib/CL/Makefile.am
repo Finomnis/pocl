@@ -2,7 +2,7 @@
 # and all subdirectories).
 # Makefile.am for pocl/lib/CL.
 # 
-# Copyright (c) 2011-2012 Universidad Rey Juan Carlos and 
+# Copyright (c) 2011-2014 Universidad Rey Juan Carlos and 
 #                         Tampere University of Technology
 # 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -119,6 +119,7 @@ libpocl_la_SOURCES = clCreateContextFromType.c	\
                    clGetSupportedImageFormats.c	\
                    clGetExtensionFunctionAddress.c \
                    clIcdGetPlatformIDsKHR.c \
+                   clCreateSubDevices.c \
                    clReleaseDevice.c \
                    clRetainDevice.c \
                    pocl_cl.h \
@@ -128,7 +129,8 @@ libpocl_la_SOURCES = clCreateContextFromType.c	\
                    pocl_intfn.h \
                    pocl_llvm.h \
                    pocl_runtime_config.c pocl_runtime_config.h \
-                   pocl_mem_management.c pocl_mem_management.h
+                   pocl_mem_management.c pocl_mem_management.h \
+                   pocl_hash.c pocl_hash.h
 
 
 libpocl_la_CPPFLAGS = -I$(top_srcdir)/fix-include -I$(top_srcdir)/fix-include/OpenCL -I$(top_srcdir)/include -I$(top_srcdir)/lib/CL/devices $(OCL_ICD_CFLAGS)
@@ -148,6 +150,10 @@ if BUILD_HPX
 SUBDIRS += hpx-threads
 libpocl_la_LIBADD += hpx-threads/libhpxthread.la
 endif
+
+# The POCL_DEBUG output requires the clock_gettime and older glibs
+# have it in a separate lib.
+libpocl_la_LIBADD += -lrt
 
 if BUILD_SPU
 libpocl_la_LIBADD += -lspe2
@@ -170,10 +176,16 @@ libpocl_la_LDFLAGS += -L${top_builddir}/lib/CL/ @ICD_LD_FLAGS@
 libpocl_la_LIBADD += libpoclllvm.la
 libpocl_la_LIBADD += ${top_builddir}/lib/llvmopencl/libllvmpasses.la
 libpocl_la_LIBADD += -lclangFrontend -lclangDriver -lclangParse -lclangSema -lclangEdit -lclangLex -lclangSerialization
-libpocl_la_LIBADD += -lclangBasic -lclangFrontendTool -lclangRewriteFrontend 
+libpocl_la_LIBADD += -lclangAST -lclangBasic -lclangFrontendTool -lclangRewriteFrontend 
 libpocl_la_LIBADD += -lclangStaticAnalyzerFrontend -lclangStaticAnalyzerCore
-libpocl_la_LIBADD += -lclangAnalysis -lclangCodeGen -lclangAST 
+libpocl_la_LIBADD += -lclangAnalysis -lclangCodeGen -lclangAST
 libpocl_la_LIBADD += -lstdc++ -lm @LLVM_LIBS@
+
+if LLVM_3_6
+libpocl_la_LIBADD += -lclangToolingCore 
+endif
+
+libpocl_la_LIBADD += -lclangASTMatchers -lclangBasic
 
 if ! BUILD_ICD
 libOpenCL_la_SOURCES = ${libpocl_la_SOURCES}

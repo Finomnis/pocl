@@ -35,7 +35,7 @@ int pocl_llvm_build_program
 (cl_program program,
  cl_device_id device,
  int device_i,     
- const char* temp_dir,
+ const char* cache_dir,
  const char* binary_filename,
  const char* device_tmpdir,
  const char* user_options);
@@ -98,6 +98,11 @@ int pocl_llvm_codegen ( cl_kernel kernel,
                         cl_device_id device,
                         const char *infile,
                         const char *outfile);
+
+/* Parse program file and populate program's llvm_irs */
+void
+pocl_update_program_llvm_irs(cl_program program,
+                       cl_device_id device, const char* program_filename);
 
 #ifdef __cplusplus
 }

@@ -27,9 +27,13 @@
 #include "pocl_llvm.h"
 #include "pocl_util.h"
 #include "utlist.h"
+#ifndef _MSC_VER
+#  include <unistd.h>
+#else
+#  include "vccompat.hpp"
+#endif
 #include <assert.h>
 #include <sys/stat.h>
-#include <unistd.h>
 #include <errno.h>
 #include <string.h>
 
@@ -52,35 +56,33 @@ POname(clEnqueueNDRangeKernel)(cl_command_queue command_queue,
   size_t offset_x, offset_y, offset_z;
   size_t global_x, global_y, global_z;
   size_t local_x, local_y, local_z;
-  char tmpdir[POCL_FILENAME_LENGTH];
+  char cachedir[POCL_FILENAME_LENGTH];
   char kernel_filename[POCL_FILENAME_LENGTH];
-  FILE *kernel_file;
   char parallel_filename[POCL_FILENAME_LENGTH];
-  size_t n;
+  char so_filename[POCL_FILENAME_LENGTH];
   int i, count;
   int error;
   struct pocl_context pc;
   _cl_command_node *command_node;
 
-  if (command_queue == NULL)
-    return CL_INVALID_COMMAND_QUEUE;
+  POCL_RETURN_ERROR_COND((command_queue == NULL), CL_INVALID_COMMAND_QUEUE);
   
-  if (kernel == NULL)
-    return CL_INVALID_KERNEL;
+  POCL_RETURN_ERROR_COND((kernel == NULL), CL_INVALID_KERNEL);
 
-  if (command_queue->context != kernel->context)
-    return CL_INVALID_CONTEXT;
+  POCL_RETURN_ERROR_ON((command_queue->context != kernel->context),
+    CL_INVALID_CONTEXT, "kernel and command_queue are not from the same context\n");
 
-  if (work_dim < 1 ||
-      work_dim > command_queue->device->max_work_item_dimensions)
-    return CL_INVALID_WORK_DIMENSION;
-  assert (command_queue->device->max_work_item_dimensions <= 3);
+  POCL_RETURN_ERROR_COND((work_dim < 1), CL_INVALID_WORK_DIMENSION);
+  POCL_RETURN_ERROR_ON((work_dim > command_queue->device->max_work_item_dimensions),
+    CL_INVALID_WORK_DIMENSION, "work_dim exceeds devices' max workitem dimensions\n");
+
+  assert(command_queue->device->max_work_item_dimensions <= 3);
 
   if (global_work_offset != NULL)
     {
       offset_x = global_work_offset[0];
-      offset_y = work_dim > 1 ? global_work_offset[1] : 1;
-      offset_z = work_dim > 2 ? global_work_offset[2] : 1;
+      offset_y = work_dim > 1 ? global_work_offset[1] : 0;
+      offset_z = work_dim > 2 ? global_work_offset[2] : 0;
     }
   else
     {
@@ -93,15 +95,13 @@ POname(clEnqueueNDRangeKernel)(cl_command_queue command_queue,
   global_y = work_dim > 1 ? global_work_size[1] : 1;
   global_z = work_dim > 2 ? global_work_size[2] : 1;
 
-  if (global_x == 0 || global_y == 0 || global_z == 0)
-    return CL_INVALID_GLOBAL_WORK_SIZE;
+  POCL_RETURN_ERROR_COND((global_x == 0 || global_y == 0 || global_z == 0),
+    CL_INVALID_GLOBAL_WORK_SIZE);
 
   for (i = 0; i < kernel->num_args; i++)
     {
-      if (!kernel->arg_info[i].is_set)
-        {
-          return CL_INVALID_KERNEL_ARGS;
-        }
+      POCL_RETURN_ERROR_ON((!kernel->arg_info[i].is_set), CL_INVALID_KERNEL_ARGS,
+        "The %i-th kernel argument is not set!\n", i)
     }
 
   if (local_work_size != NULL) 
@@ -112,6 +112,15 @@ POname(clEnqueueNDRangeKernel)(cl_command_queue command_queue,
     } 
   else 
     {
+      /* Embarrassingly parallel kernel with a free work-group
+         size. Try to figure out one which utilizes all the
+         resources efficiently. Assume work-groups are scheduled
+         to compute units, so try to split it to a number of 
+         work groups at the equal to the number of CUs, while still 
+         trying to respect the preferred WG size multiple (for better 
+         SIMD instruction utilization).          
+      */
+
       size_t preferred_wg_multiple;
       cl_int retval = 
         POname(clGetKernelWorkGroupInfo)
@@ -119,118 +128,147 @@ POname(clEnqueueNDRangeKernel)(cl_command_queue command_queue,
          CL_KERNEL_PREFERRED_WORK_GROUP_SIZE_MULTIPLE, 
          sizeof (size_t), &preferred_wg_multiple, NULL);
 
-      local_x = local_y = local_z = 1;
-      if (retval == CL_SUCCESS)
-        {
-          /* Find the largest multiple of the preferred wg multiple.
-             E.g. if the preferred is 8 it doesn't work with a
-             global size of 20. However, 4 is better than 1 in that
-             case because it still enables wi-parallelization. */
-          while (preferred_wg_multiple >= 1)
-            {
-              if (global_x % preferred_wg_multiple == 0 &&
-                  preferred_wg_multiple <= global_x)
-                {
-                  local_x = preferred_wg_multiple;
-                  break;
-                }
-              preferred_wg_multiple /= 2;
-            }
-        }
+      POCL_MSG_PRINT_INFO("Preferred WG size multiple %zu\n", 
+                          preferred_wg_multiple);
+
+      local_x = global_x;
+      local_y = global_y;
+      local_z = global_z;
+
+      /* First try to split a dimension with the WG multiple
+         to make it still be divisible with the WG multiple. */
+      do {
+        /* Split the dimension, but avoid ending up with a dimension that
+           is not multiple of the wanted size. */
+        if (local_x > 1 && local_x % 2 == 0 && 
+            (local_x / 2) % preferred_wg_multiple == 0)
+          {
+            local_x /= 2;
+            continue;
+          }
+        else if (local_y > 1 && local_y % 2 == 0 &&
+                 (local_y / 2) % preferred_wg_multiple == 0)
+          {
+            local_y /= 2;
+            continue;
+          }
+        else if (local_z > 1 && local_z % 2 == 0 &&
+                 (local_z / 2) % preferred_wg_multiple == 0)         
+          {
+            local_z /= 2;
+            continue;
+          }
+
+        /* Next find out a dimension that is not a multiple anyways,
+           so one cannot nicely vectorize over it, and set it to one. */
+        if (local_z > 1 && local_z % preferred_wg_multiple != 0) 
+          {
+            local_z = 1;
+            continue;
+          }
+        else if (local_y > 1 && local_y % preferred_wg_multiple != 0) 
+          {
+            local_y = 1;
+            continue;
+          }
+        else if (local_z > 1 && local_z % preferred_wg_multiple != 0) 
+          {
+            local_z = 1;
+            continue;
+          }
+
+        /* Finally, start setting them to zero starting from the Z 
+           dimension. */
+        if (local_z > 1) 
+          {
+            local_z = 1;
+            continue;
+          }
+        else if (local_y > 1) 
+          {
+            local_y = 1;
+            continue;
+          }
+        else if (local_x > 1) 
+          {
+            local_x = 1;
+            continue;
+          }
+      }
+      while (local_x * local_y * local_z >
+             command_queue->device->max_work_group_size);
     }
 
-#ifdef DEBUG_NDRANGE
-  printf("### queueing kernel %s for dimensions %zu x %zu x %zu...", 
-         kernel->function_name, local_x, local_y, local_z);
-#endif
+  POCL_MSG_PRINT_INFO("Qeueing kernel %s with local size %u x %u x %u group "
+                      "sizes %u x %u x %u...\n",
+                      kernel->function_name, 
+                      (unsigned)local_x, (unsigned)local_y, (unsigned)local_z,
+                      (unsigned)(global_x / local_x), 
+                      (unsigned)(global_y / local_y), 
+                      (unsigned)(global_z / local_z));
 
-  if (local_x * local_y * local_z > command_queue->device->max_work_group_size)
-    return CL_INVALID_WORK_GROUP_SIZE;
+  POCL_RETURN_ERROR_ON((local_x * local_y * local_z > command_queue->device->max_work_group_size),
+    CL_INVALID_WORK_GROUP_SIZE, "Local worksize dimensions exceed device's max workgroup size\n");
 
-  if (local_x > command_queue->device->max_work_item_sizes[0] ||
-      (work_dim > 1 &&
-       local_y > command_queue->device->max_work_item_sizes[1]) ||
-      (work_dim > 2 &&
-       local_z > command_queue->device->max_work_item_sizes[2]))
-    return CL_INVALID_WORK_ITEM_SIZE;
+  POCL_RETURN_ERROR_ON((local_x > command_queue->device->max_work_item_sizes[0]),
+    CL_INVALID_WORK_ITEM_SIZE, "local_work_size.x > device's max_workitem_sizes[0]\n");
 
-  if (global_x % local_x != 0 ||
-      global_y % local_y != 0 ||
-      global_z % local_z != 0)
-    return CL_INVALID_WORK_GROUP_SIZE;
+  if (work_dim > 1)
+    POCL_RETURN_ERROR_ON((local_y > command_queue->device->max_work_item_sizes[1]),
+    CL_INVALID_WORK_ITEM_SIZE, "local_work_size.y > device's max_workitem_sizes[1]\n");
 
-  if ((event_wait_list == NULL && num_events_in_wait_list > 0) ||
-      (event_wait_list != NULL && num_events_in_wait_list == 0))
-    return CL_INVALID_EVENT_WAIT_LIST;
+  if (work_dim > 2)
+    POCL_RETURN_ERROR_ON((local_z > command_queue->device->max_work_item_sizes[2]),
+    CL_INVALID_WORK_ITEM_SIZE, "local_work_size.z > device's max_workitem_sizes[2]\n");
 
-  snprintf (tmpdir, POCL_FILENAME_LENGTH, "%s/%s/%s/%zu-%zu-%zu", 
-            kernel->program->temp_dir, command_queue->device->short_name, 
-            kernel->name, 
+  POCL_RETURN_ERROR_COND((global_x % local_x != 0), CL_INVALID_WORK_GROUP_SIZE);
+  POCL_RETURN_ERROR_COND((global_y % local_y != 0), CL_INVALID_WORK_GROUP_SIZE);
+  POCL_RETURN_ERROR_COND((global_z % local_z != 0), CL_INVALID_WORK_GROUP_SIZE);
+
+  POCL_RETURN_ERROR_COND((event_wait_list == NULL && num_events_in_wait_list > 0),
+    CL_INVALID_EVENT_WAIT_LIST);
+
+  POCL_RETURN_ERROR_COND((event_wait_list != NULL && num_events_in_wait_list == 0),
+    CL_INVALID_EVENT_WAIT_LIST);
+
+
+  snprintf (cachedir, POCL_FILENAME_LENGTH, "%s/%s/%s/%zu-%zu-%zu",
+            kernel->program->cache_dir, command_queue->device->cache_dir_name,
+            kernel->name,
             local_x, local_y, local_z);
-  mkdir (tmpdir, S_IRWXU);
 
+  if (access (cachedir, F_OK) != 0)
+    mkdir (cachedir, S_IRWXU);
   
   error = snprintf
-    (parallel_filename, POCL_FILENAME_LENGTH,
-     "%s/%s", tmpdir, POCL_PARALLEL_BC_FILENAME);
+          (parallel_filename, POCL_FILENAME_LENGTH,
+          "%s/%s", cachedir, POCL_PARALLEL_BC_FILENAME);
   if (error < 0)
     return CL_OUT_OF_HOST_MEMORY;
 
-  if (kernel->program->llvm_irs[0] == NULL)
-    {
-      error = snprintf
-        (kernel_filename, POCL_FILENAME_LENGTH,
-         "%s/%s/%s/kernel.bc", kernel->program->temp_dir, 
-         command_queue->device->short_name, kernel->name);
+  error = snprintf
+          (so_filename, POCL_FILENAME_LENGTH,
+          "%s/%s.so", cachedir, kernel->name);
+  if (error < 0)
+    return CL_OUT_OF_HOST_MEMORY;
 
-      if (error < 0)
-        return CL_OUT_OF_HOST_MEMORY;
+  error = snprintf
+          (kernel_filename, POCL_FILENAME_LENGTH,
+           "%s/%s/%s", kernel->program->cache_dir,
+           command_queue->device->cache_dir_name, POCL_PROGRAM_BC_FILENAME);
+  if (error < 0)
+    return CL_OUT_OF_HOST_MEMORY;
 
-      if (access (kernel_filename, F_OK) != 0) 
-        {
-          kernel_file = fopen(kernel_filename, "w+");
-          if (kernel_file == NULL)
-            return CL_OUT_OF_HOST_MEMORY;
-
-          n = fwrite(kernel->program->binaries[command_queue->device->dev_id], 1,
-                     kernel->program->binary_sizes[command_queue->device->dev_id], 
-                     kernel_file);
-          if (n < kernel->program->binary_sizes[command_queue->device->dev_id])
-            return CL_OUT_OF_HOST_MEMORY;
-  
-          fclose(kernel_file);
-
-#ifdef DEBUG_NDRANGE
-          printf("[kernel bc written] ");
-#endif
-        }
-      else
-        {
-#ifdef DEBUG_NDRANGE
-          printf("[kernel bc already written] ");
-#endif
-        }
-    }
-
-  if (access (parallel_filename, F_OK) != 0) 
+  if (access(so_filename, F_OK) != 0)
     {
       error = pocl_llvm_generate_workgroup_function
           (command_queue->device,
            kernel, local_x, local_y, local_z,
            parallel_filename, kernel_filename);
-      if (error) return error;
 
-#ifdef DEBUG_NDRANGE
-      printf("[parallel bc created]\n");
-#endif
+      if (error)  return error;
     }
-  else
-    {
-#ifdef DEBUG_NDRANGE
-      printf("[parallel bc already created]\n");
-#endif
-    }
-  
+
   error = pocl_create_command (&command_node, command_queue,
                                CL_COMMAND_NDRANGE_KERNEL,
                                event, num_events_in_wait_list,
@@ -248,7 +286,7 @@ POname(clEnqueueNDRangeKernel)(cl_command_queue command_queue,
 
   command_node->type = CL_COMMAND_NDRANGE_KERNEL;
   command_node->command.run.data = command_queue->device->data;
-  command_node->command.run.tmp_dir = strdup(tmpdir);
+  command_node->command.run.tmp_dir = strdup(cachedir);
   command_node->command.run.kernel = kernel;
   command_node->command.run.pc = pc;
   command_node->command.run.local_x = local_x;
@@ -289,7 +327,7 @@ POname(clEnqueueNDRangeKernel)(cl_command_queue command_queue,
 
   command_node->next = NULL; 
   
-  POname(clRetainCommandQueue) (command_queue);
+  
   POname(clRetainKernel) (kernel);
 
   command_node->command.run.arg_buffer_count = 0;

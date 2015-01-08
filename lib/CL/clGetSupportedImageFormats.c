@@ -45,14 +45,14 @@ CL_API_SUFFIX__VERSION_1_0
   int reff_found;
   int formatCount = 0;
   
-  if (context == NULL && context->num_devices == 0)
-    return CL_INVALID_CONTEXT;
+  POCL_RETURN_ERROR_COND((context == NULL), CL_INVALID_CONTEXT);
+
+  POCL_RETURN_ERROR_COND((context->num_devices == 0), CL_INVALID_CONTEXT);
   
-  if (num_entries == 0 && image_formats != NULL)
-    return CL_INVALID_VALUE;
+  POCL_RETURN_ERROR_COND((num_entries == 0 && image_formats != NULL), CL_INVALID_VALUE);
   
-  dev_image_formats = calloc (context->num_devices, sizeof(cl_image_format*));
-  dev_num_image_formats = calloc (context->num_devices, sizeof(int));
+  dev_image_formats = (const cl_image_format**) calloc (context->num_devices, sizeof(cl_image_format*));
+  dev_num_image_formats = (int*) calloc (context->num_devices, sizeof(int));
   
   if (dev_image_formats == NULL || dev_num_image_formats == NULL)
     return CL_OUT_OF_HOST_MEMORY;
@@ -121,8 +121,8 @@ CL_API_SUFFIX__VERSION_1_0
     }
   
  CLEAN_MEM_AND_RETURN:
-  free (dev_num_image_formats);
-  free (dev_image_formats);
+  POCL_MEM_FREE(dev_num_image_formats);
+  POCL_MEM_FREE(dev_image_formats);
   return errcode;
 } 
 POsym(clGetSupportedImageFormats)

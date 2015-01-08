@@ -25,8 +25,12 @@
 #include "pocl_cl.h"
 #include "pocl_llvm.h"
 #include <string.h>
-#include <unistd.h>
 #include <sys/stat.h>
+#ifndef _MSC_VER
+#  include <unistd.h>
+#else
+#  include "vccompat.hpp"
+#endif
 
 #define COMMAND_LENGTH 1024
 
@@ -35,32 +39,23 @@ POname(clCreateKernel)(cl_program program,
                const char *kernel_name,
                cl_int *errcode_ret) CL_API_SUFFIX__VERSION_1_0
 {
-  cl_kernel kernel;
-  char device_tmpdir[POCL_FILENAME_LENGTH];
+  cl_kernel kernel = NULL;
+  char device_cachedir[POCL_FILENAME_LENGTH];
   char descriptor_filename[POCL_FILENAME_LENGTH];
   int errcode;
   int error;
-  lt_dlhandle dlhandle = NULL;
-  int i;
   int device_i;
 
-  if (kernel_name == NULL)
-  {
-    errcode = CL_INVALID_VALUE;
-    goto ERROR;
-  }
-  
-  if (program == NULL || program->num_devices == 0)
-  {
-    errcode = CL_INVALID_PROGRAM;
-    goto ERROR;
-  }
+  POCL_GOTO_ERROR_COND((kernel_name == NULL), CL_INVALID_VALUE);
 
-  if (program->binaries == NULL || program->binary_sizes == NULL)
-  {
-    errcode = CL_INVALID_PROGRAM_EXECUTABLE;
-    goto ERROR;
-  }
+  POCL_GOTO_ERROR_COND((program == NULL), CL_INVALID_VALUE);
+  
+  POCL_GOTO_ERROR_ON((program->num_devices == 0),
+    CL_INVALID_PROGRAM, "Invalid program (has no devices assigned)\n");
+
+  POCL_GOTO_ERROR_ON((program->binaries == NULL || program->binary_sizes == NULL),
+    CL_INVALID_PROGRAM_EXECUTABLE, "No binaries in program (perhaps you forgot "
+    "to call clBuildProgram first ?\n");
 
   kernel = (cl_kernel) malloc(sizeof(struct _cl_kernel));
   if (kernel == NULL)
@@ -76,21 +71,24 @@ POname(clCreateKernel)(cl_program program,
       if (device_i > 0)
         POname(clRetainKernel) (kernel);
 
-      snprintf (device_tmpdir, POCL_FILENAME_LENGTH, "%s/%s", 
-                program->temp_dir, program->devices[device_i]->short_name);
+      snprintf (device_cachedir, POCL_FILENAME_LENGTH, "%s/%s",
+                program->cache_dir, program->devices[device_i]->cache_dir_name);
 
       /* If there is no device dir for this device, the program was
          not built for that device in clBuildProgram. This seems to
          be OK by the standard. */
-      if (access (device_tmpdir, F_OK) != 0) continue;
+      if (access (device_cachedir, F_OK) != 0) continue;
  
       error = pocl_llvm_get_kernel_metadata 
-          (program, kernel, device_i, kernel_name, 
-           device_tmpdir, descriptor_filename, &errcode);
+          (program, kernel, program->devices[device_i]->dev_id, kernel_name,
+           device_cachedir, descriptor_filename, &errcode);
 
       if (error)
         {
-          goto ERROR_CLEAN_KERNEL;
+          POCL_MSG_ERR("Failed to get kernel metadata "
+            "for kernel %s on device %s\n", kernel_name,
+              program->devices[device_i]->short_name);
+          goto ERROR;
         } 
 
       /* when using the API, there is no descriptor file */
@@ -116,9 +114,8 @@ POname(clCreateKernel)(cl_program program,
     *errcode_ret = CL_SUCCESS;
   return kernel;
 
-ERROR_CLEAN_KERNEL:
-  free(kernel);
 ERROR:
+  POCL_MEM_FREE(kernel);
   if(errcode_ret != NULL)
   {
     *errcode_ret = errcode;

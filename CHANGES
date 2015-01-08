@@ -3,8 +3,37 @@
 
 [git log last checked on 2014-08-22]
 
-0.10 August 2014
-================
+Highlights
+----------
+- Kernel compiler cache.
+- Android support.
+
+Kernel compiler
+---------------
+- Do not add implicit barriers to kernels without WG barriers
+  to avoid WI context data overheads.
+- Setting the POCL_VECTORIZER_REMARKS env to 1 prints out LLVM vectorizer 
+  remarks during kernel compilation.
+
+OpenCL Runtime/Platform API support
+-----------------------------------
+- Minimal initial implementation for clCreateSubDevices()
+
+Bugfixes
+--------
+- Fix falsely detecting operations with side-effects (especially atomic
+  operations) as uniform. This caused deadlock/race situations due to 
+  illegal implicit barrier injection.
+- Fix several reference counting issues.
+- Memory leak fixes.
+
+Misc.
+-----
+- The old BBVectorizer forked WIVectorizer removed due to bit rot and 
+  the general hackiness of it.
+  
+0.10 September 2014
+===================
 
 This lists only the most interesting changes. Please
 refer to the version control log for a full listing.

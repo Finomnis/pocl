@@ -25,14 +25,27 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
+
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <time.h>
+
+#ifndef _MSC_VER
+#  include <dirent.h>
+#  include <unistd.h>
+#  include <utime.h>
+#else
+#  include "vccompat.hpp"
+#endif
 
 #include "pocl_util.h"
-#include "pocl_cl.h"
 #include "utlist.h"
+#include "common.h"
 #include "pocl_mem_management.h"
+#include "pocl_runtime_config.h"
 
-#define TEMP_DIR_PATH_CHARS 16
+
+#define CACHE_DIR_PATH_CHARS 512
 
 struct list_item;
 
@@ -43,34 +56,111 @@ typedef struct list_item
 } list_item;
 
 void 
-remove_directory (const char *path_name) 
+pocl_remove_directory (const char *path_name)
 {
   int str_size = 10 + strlen(path_name) + 1;
   char *cmd = (char*)malloc(str_size);
-  snprintf (cmd, str_size, "rm -fr '%s'", path_name);
-  system (cmd);
-  free (cmd);
+  snprintf(cmd, str_size, "rm -fr '%s'", path_name);
+  system(cmd);
+  POCL_MEM_FREE(cmd);
 }
 
-#define POCL_TEMPDIR_ENV "POCL_TEMP_DIR"
+void
+pocl_remove_file (const char *file_path)
+{
+  int str_size = 10 + strlen(file_path) + 1;
+  char *cmd = (char*)malloc(str_size);
+  snprintf(cmd, str_size, "rm -f '%s'", file_path);
+  system(cmd);
+  POCL_MEM_FREE(cmd);
+}
+
+void
+pocl_make_directory (const char *path_name)
+{
+  int str_size = 12 + strlen(path_name) + 1;
+  char *cmd = (char*)malloc(str_size);
+  snprintf(cmd, str_size, "mkdir -p '%s'", path_name);
+  system(cmd);
+  POCL_MEM_FREE(cmd);
+}
+
+void
+pocl_create_or_append_file (const char *file_name, const char *content)
+{
+  FILE *fp = fopen(file_name, "a");
+  if ((fp == NULL) || (content == NULL))
+    return;
+
+  fprintf(fp, "%s", content);
+
+  fclose(fp);
+}
+
+int
+pocl_read_text_file (const char* file_name, char** content_dptr)
+{
+  FILE *fp;
+  struct stat st;
+  int file_size;
+
+  stat(file_name, &st);
+  file_size = (int)st.st_size;
+
+  fp = fopen(file_name, "r");
+  if (fp == NULL)
+    return 0;
+
+  *content_dptr = (char*) malloc((file_size + 1) * sizeof(char));
+  if (!(*content_dptr)) return 0;
+
+  int read = fread(*content_dptr, sizeof(char), file_size, fp);
+  (*content_dptr)[file_size] = '\0';
+
+  return read;
+}
 
 char*
-pocl_create_temp_dir() 
-{  
-  char *path_name; 
-  if (getenv(POCL_TEMPDIR_ENV) != NULL &&
-      access (getenv(POCL_TEMPDIR_ENV), F_OK) == 0) 
+pocl_create_program_cache_dir(cl_program program)
+{
+  char *tmp_path = NULL, *cache_path = NULL;
+  char hash_str[SHA1_DIGEST_SIZE * 2 + 1];
+  int i;
+
+  for (i = 0; i < SHA1_DIGEST_SIZE; i++)
+    sprintf(&hash_str[i*2], "%02x", (unsigned int) program->build_hash[i]);
+
+  cache_path = (char*)malloc(CACHE_DIR_PATH_CHARS);
+
+  tmp_path = getenv("POCL_CACHE_DIR");
+  if (tmp_path && (access(tmp_path, W_OK) == 0))
     {
-      path_name = (char*)malloc (strlen(getenv(POCL_TEMPDIR_ENV)) + 1);
-      strcpy (path_name, getenv(POCL_TEMPDIR_ENV));
+      snprintf(cache_path, CACHE_DIR_PATH_CHARS, "%s/%s", tmp_path, hash_str);
     }
-  else 
+  else
     {
-      path_name = (char*)malloc (TEMP_DIR_PATH_CHARS);
-      strncpy (path_name, "/tmp/poclXXXXXX\0", TEMP_DIR_PATH_CHARS);
-      mkdtemp (path_name);  
+#ifdef POCL_ANDROID
+      snprintf(cache_path, CACHE_DIR_PATH_CHARS,
+                  "/data/data/%s/cache/", pocl_get_process_name());
+
+      if (access(cache_path, W_OK) == 0)
+        strcat(cache_path, hash_str);
+      else
+        snprintf(cache_path, CACHE_DIR_PATH_CHARS, "/sdcard/pocl/kcache/%s", hash_str);
+#else
+      tmp_path = getenv("HOME");
+
+      if (tmp_path)
+        snprintf(cache_path, CACHE_DIR_PATH_CHARS, "%s/.pocl/%s", tmp_path, hash_str);
+      else
+        snprintf(cache_path, CACHE_DIR_PATH_CHARS, "/tmp/pocl/%s", hash_str);
+#endif
     }
-  return path_name;
+
+  if (access(cache_path, F_OK) != 0)
+    pocl_make_directory(cache_path);
+
+    return cache_path;
 }
 
 uint32_t
@@ -130,7 +220,7 @@ pocl_size_ceil2(size_t x) {
 
 #ifndef HAVE_ALIGNED_ALLOC
 void *
-pocl_aligned_malloc(size_t alignment, size_t size)
+pocl_aligned_malloc (size_t alignment, size_t size)
 {
 # ifdef HAVE_POSIX_MEMALIGN
   
@@ -147,12 +237,11 @@ pocl_aligned_malloc(size_t alignment, size_t size)
     alignment = sizeof(void* );
 
   void* result;
-  int err;
   
-  err = posix_memalign(&result, alignment, size);
-  if (err)
+  result = pocl_memalign_alloc(alignment, size);
+  if (result == NULL)
     {
-      errno = err;
+      errno = -1;
       return NULL;
     }
 
@@ -191,7 +280,7 @@ pocl_aligned_malloc(size_t alignment, size_t size)
 
 #if !defined HAVE_ALIGNED_ALLOC && !defined HAVE_POSIX_MEMALIGN
 void
-pocl_aligned_free(void *ptr)
+pocl_aligned_free (void *ptr)
 {
   /* extract pointer from original allocation and free it */
   if (ptr)
@@ -218,7 +307,7 @@ cl_int pocl_create_event (cl_event *event, cl_command_queue command_queue,
   return CL_SUCCESS;
 }
 
-cl_int pocl_create_command (_cl_command_node **cmd, 
+cl_int pocl_create_command (_cl_command_node **cmd,
                             cl_command_queue command_queue, 
                             cl_command_type command_type, cl_event *event_p, 
                             cl_int num_events, const cl_event *wait_list)
@@ -247,7 +336,7 @@ cl_int pocl_create_command (_cl_command_node **cmd,
   err = pocl_create_event(event, command_queue, command_type);
   if (err != CL_SUCCESS)
     {
-      free (*cmd);
+      POCL_MEM_FREE(*cmd);
       return err;
     }
   if (event_p)
@@ -292,7 +381,7 @@ cl_int pocl_create_command (_cl_command_node **cmd,
   return CL_SUCCESS;
 }
 
-void pocl_command_enqueue(cl_command_queue command_queue, 
+void pocl_command_enqueue (cl_command_queue command_queue,
                           _cl_command_node *node)
 {
   POCL_LOCK_OBJ(command_queue);
@@ -304,4 +393,310 @@ void pocl_command_enqueue(cl_command_queue command_queue,
   #endif
   POCL_UPDATE_EVENT_QUEUED (&node->event, command_queue);
 
+}
+
+char* pocl_get_process_name ()
+{
+  char tmpStr[64], cmdline[512], *processName = NULL;
+  FILE *statusFile;
+  int len, i, begin;
+
+  snprintf(tmpStr, 64, "/proc/%d/cmdline", getpid());
+  statusFile = fopen(tmpStr, "r");
+  if (statusFile == NULL)
+    return NULL;
+
+  if (fgets(cmdline, 511, statusFile) != NULL)
+    {
+      len = strlen(cmdline);
+      begin = 0;
+      for (i=len-1; i>=0; i--)     /* Extract program-name after last '/' */
+        {
+          if (cmdline[i] == '/')
+            {
+              begin = i + 1;
+              break;
+            }
+        }
+      processName = strdup(cmdline + begin);
+    }
+
+  fclose(statusFile);
+  return processName;
+}
+
+static int cache_lock_initialized = 0;
+static pocl_lock_t cache_lock = PTHREAD_MUTEX_INITIALIZER;
+
+void
+pocl_check_and_invalidate_cache (cl_program program,
+                  int device_i, const char* device_tmpdir)
+{
+  int cache_dirty = 0;
+  char *content = NULL, *s_ptr, *ss_ptr;
+  int read = 0;
+
+  POCL_LOCK(cache_lock);
+
+  if (!pocl_get_bool_option("POCL_KERNEL_CACHE", POCL_BUILD_KERNEL_CACHE))
+    {
+      cache_dirty = 1;
+      goto bottom;
+    }
+
+  /* If program contains "#include", disable caching
+     Included headers might get modified, force recompilation in all the cases
+     Yes, this is a very dirty way to find "# include"
+     but we can live with this for now
+   */
+  if (!pocl_get_bool_option("POCL_KERNEL_CACHE_IGNORE_INCLUDES", 0) &&
+      program->source)
+    {
+      for (s_ptr = program->source; (*s_ptr); s_ptr++)
+        {
+          if ((*s_ptr) == '#')
+            {
+              /* Skip all the white-spaces between # & include */
+              for (ss_ptr = s_ptr+1; (*ss_ptr == ' '); ss_ptr++) ;
+              
+              if (strncmp(ss_ptr, "include", 7) == 0)
+                cache_dirty = 1;
+            }
+        }
+    }
+
+  bottom:
+  if (cache_dirty)
+    {
+      pocl_remove_directory(device_tmpdir);
+      mkdir(device_tmpdir, S_IRWXU);
+    }
+
+  POCL_UNLOCK(cache_lock);
+}
+
+void pocl_touch_file(const char* file_name)
+{
+  struct stat file_stat;
+  struct utimbuf new_time;
+
+  if (access(file_name, F_OK) != 0)
+    {
+      FILE *fp = fopen(file_name, "w");
+      fclose(fp);
+    }
+
+  stat(file_name, &file_stat);
+
+  new_time.actime = file_stat.st_atime;
+  new_time.modtime = time(NULL);        /* set mtime to current time */
+  utime(file_name, &new_time);
+}
+
+
+int pocl_buffer_boundcheck(cl_mem buffer, size_t offset, size_t size) {
+  POCL_RETURN_ERROR_ON((offset > buffer->size), CL_INVALID_VALUE,
+            "offset(%zu) > buffer->size(%zu)", offset, buffer->size)
+  POCL_RETURN_ERROR_ON((size > buffer->size), CL_INVALID_VALUE,
+            "size(%zu) > buffer->size(%zu)", size, buffer->size)
+  POCL_RETURN_ERROR_ON((offset + size > buffer->size), CL_INVALID_VALUE,
+            "offset + size (%zu) > buffer->size(%zu)", (offset+size), buffer->size)
+  return CL_SUCCESS;
+}
+
+int pocl_buffer_boundcheck_3d(const size_t buffer_size,
+                              const size_t *origin,
+                              const size_t *region,
+                              size_t *row_pitch,
+                              size_t *slice_pitch,
+                              const char* prefix)
+{
+  size_t rp = *row_pitch;
+  size_t sp = *slice_pitch;
+
+  /* CL_INVALID_VALUE if row_pitch is not 0 and is less than region[0]. */
+  POCL_RETURN_ERROR_ON((rp != 0 && rp<region[0]),
+    CL_INVALID_VALUE, "%srow_pitch is not 0 and is less than region[0]\n", prefix);
+
+  if (rp == 0) rp = region[0];
+
+  /* CL_INVALID_VALUE if slice_pitch is not 0 and is less than region[1] * row_pitch
+   * or if slice_pitch is not 0 and is not a multiple of row_pitch.
+   */
+  POCL_RETURN_ERROR_ON((sp != 0 && sp < (region[1] * rp)),
+    CL_INVALID_VALUE, "%sslice_pitch is not 0 and is less than "
+      "region[1] * %srow_pitch\n", prefix, prefix);
+  POCL_RETURN_ERROR_ON((sp != 0 && (sp % rp != 0)),
+    CL_INVALID_VALUE, "%sslice_pitch is not 0 and is not a multiple "
+      "of %srow_pitch\n", prefix, prefix);
+
+  if (sp == 0) sp = region[1] * rp;
+
+  *row_pitch = rp;
+  *slice_pitch = sp;
+
+  size_t byte_offset_begin = origin[2] * sp +
+               origin[1] * rp +
+               origin[0];
+
+  size_t byte_offset_end = origin[0] + region[0]-1 +
+       rp * (origin[1] + region[1]-1) +
+       sp * (origin[2] + region[2]-1);
+
+
+  POCL_RETURN_ERROR_ON((byte_offset_begin > buffer_size), CL_INVALID_VALUE,
+            "%sorigin is outside the %sbuffer", prefix, prefix);
+  POCL_RETURN_ERROR_ON((byte_offset_end > buffer_size), CL_INVALID_VALUE,
+            "%sorigin+region is outside the %sbuffer", prefix, prefix);
+  return CL_SUCCESS;
+}
+
+
+
+int pocl_buffers_boundcheck(cl_mem src_buffer,
+                            cl_mem dst_buffer,
+                            size_t src_offset,
+                            size_t dst_offset,
+                            size_t size) {
+  POCL_RETURN_ERROR_ON((src_offset > src_buffer->size), CL_INVALID_VALUE,
+            "src_offset(%zu) > src_buffer->size(%zu)", src_offset, src_buffer->size)
+  POCL_RETURN_ERROR_ON((size > src_buffer->size), CL_INVALID_VALUE,
+            "size(%zu) > src_buffer->size(%zu)", size, src_buffer->size)
+  POCL_RETURN_ERROR_ON((src_offset + size > src_buffer->size), CL_INVALID_VALUE,
+            "src_offset + size (%zu) > src_buffer->size(%zu)", (src_offset+size), src_buffer->size)
+
+  POCL_RETURN_ERROR_ON((dst_offset > dst_buffer->size), CL_INVALID_VALUE,
+            "dst_offset(%zu) > dst_buffer->size(%zu)", dst_offset, dst_buffer->size)
+  POCL_RETURN_ERROR_ON((size > dst_buffer->size), CL_INVALID_VALUE,
+            "size(%zu) > dst_buffer->size(%zu)", size, dst_buffer->size)
+  POCL_RETURN_ERROR_ON((dst_offset + size > dst_buffer->size), CL_INVALID_VALUE,
+            "dst_offset + size (%zu) > dst_buffer->size(%zu)", (dst_offset+size), dst_buffer->size)
+  return CL_SUCCESS;
+}
+
+int pocl_buffers_overlap(cl_mem src_buffer,
+                         cl_mem dst_buffer,
+                         size_t src_offset,
+                         size_t dst_offset,
+                         size_t size) {
+  /* The regions overlap if src_offset ≤ to dst_offset ≤ to src_offset + size - 1,
+   * or if dst_offset ≤ to src_offset ≤ to dst_offset + size - 1.
+   */
+  if (src_buffer == dst_buffer) {
+    POCL_RETURN_ERROR_ON(((src_offset <= dst_offset) && (dst_offset <=
+      (src_offset + size - 1))), CL_MEM_COPY_OVERLAP, "dst_offset lies inside \
+      the src region and the src_buffer == dst_buffer")
+    POCL_RETURN_ERROR_ON(((dst_offset <= src_offset) && (src_offset <=
+      (dst_offset + size - 1))), CL_MEM_COPY_OVERLAP, "src_offset lies inside \
+      the dst region and the src_buffer == dst_buffer")
+  }
+
+  /* sub buffers overlap check  */
+  if (src_buffer->parent && dst_buffer->parent &&
+        (src_buffer->parent == dst_buffer->parent)) {
+      src_offset = (char*)src_buffer->mem_host_ptr - (char*)src_buffer->parent->mem_host_ptr +
+        src_offset;
+      dst_offset = (char*)dst_buffer->mem_host_ptr - (char*)dst_buffer->parent->mem_host_ptr +
+        dst_offset;
+
+    POCL_RETURN_ERROR_ON(((src_offset <= dst_offset) && (dst_offset <=
+      (src_offset + size - 1))), CL_MEM_COPY_OVERLAP, "dst_offset lies inside \
+      the src region and src_buffer + dst_buffer are subbuffers of the same buffer")
+    POCL_RETURN_ERROR_ON(((dst_offset <= src_offset) && (src_offset <=
+      (dst_offset + size - 1))), CL_MEM_COPY_OVERLAP, "src_offset lies inside \
+      the dst region and src_buffer + dst_buffer are subbuffers of the same buffer")
+
+  }
+
+  return CL_SUCCESS;
+}
+
+/*
+ * Copyright (c) 2011 The Khronos Group Inc.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of this
+ * software and /or associated documentation files (the "Materials "), to deal in the Materials
+ * without restriction, including without limitation the rights to use, copy, modify, merge,
+ * publish, distribute, sublicense, and/or sell copies of the Materials, and to permit persons to
+ * whom the Materials are furnished to do so, subject to
+ * the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included
+ * in all copies or substantial portions of the Materials.
+ *
+ * THE MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE MATERIALS OR THE USE OR OTHER DEALINGS IN
+ * THE MATERIALS.
+ */
+
+int
+check_copy_overlap(const size_t src_offset[3],
+                   const size_t dst_offset[3],
+                   const size_t region[3],
+                   const size_t row_pitch, const size_t slice_pitch)
+{
+  const size_t src_min[] = {src_offset[0], src_offset[1], src_offset[2]};
+  const size_t src_max[] = {src_offset[0] + region[0],
+                            src_offset[1] + region[1],
+                            src_offset[2] + region[2]};
+  const size_t dst_min[] = {dst_offset[0], dst_offset[1], dst_offset[2]};
+  const size_t dst_max[] = {dst_offset[0] + region[0],
+                            dst_offset[1] + region[1],
+                            dst_offset[2] + region[2]};
+  int overlap = 1;
+  unsigned i;
+  for (i=0; i != 3; ++i)
+  {
+    overlap = overlap && (src_min[i] < dst_max[i])
+                      && (src_max[i] > dst_min[i]);
+  }
+
+  size_t dst_start =  dst_offset[2] * slice_pitch +
+                      dst_offset[1] * row_pitch + dst_offset[0];
+  size_t dst_end = dst_start + (region[2] * slice_pitch +
+                                region[1] * row_pitch + region[0]);
+  size_t src_start =  src_offset[2] * slice_pitch +
+                      src_offset[1] * row_pitch + src_offset[0];
+  size_t src_end = src_start + (region[2] * slice_pitch +
+                                region[1] * row_pitch + region[0]);
+
+  if (!overlap)
+  {
+    size_t delta_src_x = (src_offset[0] + region[0] > row_pitch) ?
+                          src_offset[0] + region[0] - row_pitch : 0;
+    size_t delta_dst_x = (dst_offset[0] + region[0] > row_pitch) ?
+                          dst_offset[0] + region[0] - row_pitch : 0;
+    if ( (delta_src_x > 0 && delta_src_x > dst_offset[0]) ||
+          (delta_dst_x > 0 && delta_dst_x > src_offset[0]) )
+      {
+        if ( (src_start <= dst_start && dst_start < src_end) ||
+          (dst_start <= src_start && src_start < dst_end) )
+          overlap = 1;
+      }
+
+    if (region[2] > 1)
+    {
+      size_t src_height = slice_pitch / row_pitch;
+      size_t dst_height = slice_pitch / row_pitch;
+
+      size_t delta_src_y = (src_offset[1] + region[1] > src_height) ?
+                            src_offset[1] + region[1] - src_height : 0;
+      size_t delta_dst_y = (dst_offset[1] + region[1] > dst_height) ?
+                            dst_offset[1] + region[1] - dst_height : 0;
+
+      if ( (delta_src_y > 0 && delta_src_y > dst_offset[1]) ||
+            (delta_dst_y > 0 && delta_dst_y > src_offset[1]) )
+      {
+        if ( (src_start <= dst_start && dst_start < src_end) ||
+              (dst_start <= src_start && src_start < dst_end) )
+              overlap = 1;
+      }
+    }
+  }
+
+  return overlap;
 }

@@ -28,6 +28,8 @@
 #include "Barrier.h"
 #include "Kernel.h"
 #include "config.h"
+#include "pocl.h"
+
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Support/CommandLine.h"
@@ -93,7 +95,7 @@ WorkitemLoops::getAnalysisUsage(AnalysisUsage &AU) const
 #ifdef LLVM_3_1
   AU.addRequired<TargetData>();
 #endif
-#if (defined LLVM_3_2 or defined LLVM_3_3 or defined LLVM_3_4)
+#if (defined LLVM_3_2 || defined LLVM_3_3 || defined LLVM_3_4)
   AU.addRequired<DominatorTree>();
   AU.addRequired<DataLayout>();
 #else
@@ -119,7 +121,7 @@ WorkitemLoops::runOnFunction(Function &F)
       pocl::WorkitemHandlerChooser::POCL_WIH_LOOPS)
     return false;
 
-  #if (defined LLVM_3_2 or defined LLVM_3_3 or defined LLVM_3_4)
+  #if (defined LLVM_3_2 || defined LLVM_3_3 || defined LLVM_3_4)
   DT = &getAnalysis<DominatorTree>();
   #else
   DTP = &getAnalysis<DominatorTreeWrapperPass>();
@@ -130,11 +132,6 @@ WorkitemLoops::runOnFunction(Function &F)
 
   tempInstructionIndex = 0;
 
-#if 0
-  std::cerr << "### original:" << std::endl;
-  chopBBs(F, *this);
-  F.viewCFG();
-#endif
 //  F.viewCFGOnly();
 
   bool changed = ProcessFunction(F);
@@ -149,7 +146,7 @@ WorkitemLoops::runOnFunction(Function &F)
   F.viewCFG();
 #endif
 
-#if (defined LLVM_3_2 or defined LLVM_3_3 or defined LLVM_3_4)
+#if (defined LLVM_3_2 || defined LLVM_3_3 || defined LLVM_3_4)
   changed |= fixUndominatedVariableUses(DT, F);
 #else
   changed |= fixUndominatedVariableUses(DTP, F);
@@ -241,7 +238,7 @@ WorkitemLoops::CreateLoopAround
     BasicBlock::Create(C, "pregion_for_cond", F, exitBB);
 
 
-#if (defined LLVM_3_2 or defined LLVM_3_3 or defined LLVM_3_4)
+#if (defined LLVM_3_2 || defined LLVM_3_3 || defined LLVM_3_4)
   DT->runOnFunction(*F);
 #else
   DTP->runOnFunction(*F);
@@ -312,7 +309,11 @@ WorkitemLoops::CreateLoopAround
 
   /* This creation of the identifier metadata is copied from
      LLVM's MDBuilder::createAnonymousTBAARoot(). */
+#ifdef LLVM_OLDER_THAN_3_6
   MDNode *Dummy = MDNode::getTemporary(C, ArrayRef<Value*>());
+#else
+  MDNode *Dummy = MDNode::getTemporary(C, ArrayRef<Metadata*>());
+#endif
   MDNode *Root = MDNode::get(C, Dummy);
   // At this point we have
   //   !0 = metadata !{}            <- dummy

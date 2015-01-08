@@ -42,38 +42,28 @@ POname(clEnqueueReadBuffer)(cl_command_queue command_queue,
   _cl_command_node *cmd = NULL;
   int errcode;
 
-  if (command_queue == NULL)
-    return CL_INVALID_COMMAND_QUEUE;
+  POCL_RETURN_ERROR_COND((command_queue == NULL), CL_INVALID_COMMAND_QUEUE);
 
-  if (buffer == NULL)
-    return CL_INVALID_MEM_OBJECT;
+  POCL_RETURN_ERROR_COND((buffer == NULL), CL_INVALID_MEM_OBJECT);
 
-  if (command_queue->context != buffer->context)
-    return CL_INVALID_CONTEXT;
+  POCL_RETURN_ERROR_ON((command_queue->context != buffer->context),
+    CL_INVALID_CONTEXT, "buffer and command_queue are not from the same context\n");
 
-  if ((ptr == NULL) ||
-      (offset + cb > buffer->size))
+  POCL_RETURN_ERROR_COND((ptr == NULL), CL_INVALID_VALUE);
+  if (pocl_buffer_boundcheck(buffer, offset, cb) != CL_SUCCESS)
     return CL_INVALID_VALUE;
 
-  if (num_events_in_wait_list > 0 && event_wait_list == NULL)
-    return CL_INVALID_EVENT_WAIT_LIST;
+  POCL_RETURN_ERROR_COND((event_wait_list == NULL && num_events_in_wait_list > 0),
+    CL_INVALID_EVENT_WAIT_LIST);
 
-  if (num_events_in_wait_list == 0 && event_wait_list != NULL)
-    return CL_INVALID_EVENT_WAIT_LIST;
+  POCL_RETURN_ERROR_COND((event_wait_list != NULL && num_events_in_wait_list == 0),
+    CL_INVALID_EVENT_WAIT_LIST);
 
   for(i=0; i<num_events_in_wait_list; i++)
-    if (event_wait_list[i] == NULL)
-      return CL_INVALID_EVENT_WAIT_LIST;
+    POCL_RETURN_ERROR_COND((event_wait_list[i] == NULL), CL_INVALID_EVENT_WAIT_LIST);
 
   device = command_queue->device;
 
-  for (i = 0; i < command_queue->context->num_devices; ++i)
-    {
-        if (command_queue->context->devices[i] == device)
-            break;
-    }
-  assert(i < command_queue->context->num_devices);
-  
   errcode = pocl_create_command (&cmd, command_queue, CL_COMMAND_READ_BUFFER, 
                                  event, num_events_in_wait_list, 
                                  event_wait_list);
@@ -81,7 +71,7 @@ POname(clEnqueueReadBuffer)(cl_command_queue command_queue,
     return errcode;
   
   cmd->command.read.host_ptr = ptr;
-  cmd->command.read.device_ptr = 
+  cmd->command.read.device_ptr = (char*)
     buffer->device_ptrs[device->dev_id].mem_ptr+offset;
   cmd->command.read.cb = cb;
   cmd->command.read.buffer = buffer;

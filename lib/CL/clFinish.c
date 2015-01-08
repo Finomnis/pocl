@@ -41,7 +41,7 @@ POname(clFinish)(cl_command_queue command_queue) CL_API_SUFFIX__VERSION_1_0
   cl_event *event;
   
   if (command_queue->properties & CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE)
-    POCL_ABORT_UNIMPLEMENTED();
+    POCL_ABORT_UNIMPLEMENTED("clFinish: Out-of-order queue");
 
   POCL_LOCK_OBJ (command_queue);
   /* loop until queue given as parameter is empty. If command in queue has 
@@ -216,14 +216,15 @@ static void exec_commands (_cl_command_node *node_list)
                 buf,  node->command.run.kernel->function_name); */
               POname(clReleaseMemObject) (buf);
             }
-          free (node->command.run.arg_buffers);
-          free (node->command.run.tmp_dir);
+          POCL_MEM_FREE(node->command.run.arg_buffers);
+          POCL_MEM_FREE(node->command.run.tmp_dir);
           for (i = 0; i < node->command.run.kernel->num_args + 
                  node->command.run.kernel->num_locals; ++i)
             {
               pocl_aligned_free (node->command.run.arguments[i].value);
+              node->command.run.arguments[i].value = NULL;
             }
-          free (node->command.run.arguments);
+          POCL_MEM_FREE(node->command.run.arguments);
       
           POname(clReleaseKernel)(node->command.run.kernel);
           break;
@@ -237,8 +238,8 @@ static void exec_commands (_cl_command_node *node_list)
               if (buf == NULL) continue;
               POname(clReleaseMemObject) (buf);
             }
-          free (node->command.native.mem_list);
-          free (node->command.native.args);
+          POCL_MEM_FREE(node->command.native.mem_list);
+          POCL_MEM_FREE(node->command.native.args);
 	      break;
         case CL_COMMAND_FILL_IMAGE:
           POCL_UPDATE_EVENT_RUNNING(event, command_queue);
@@ -251,7 +252,7 @@ static void exec_commands (_cl_command_node *node_list)
              node->command.fill_image.slicepitch,
              node->command.fill_image.fill_pixel,
              node->command.fill_image.pixel_size);
-          free(node->command.fill_image.fill_pixel);
+          POCL_MEM_FREE(node->command.fill_image.fill_pixel);
           POCL_UPDATE_EVENT_COMPLETE(event, command_queue);
           break;
         case CL_COMMAND_MARKER:
@@ -259,23 +260,25 @@ static void exec_commands (_cl_command_node *node_list)
           POCL_UPDATE_EVENT_COMPLETE(event, command_queue);
           break;
         default:
-          POCL_ABORT_UNIMPLEMENTED();
+          POCL_ABORT_UNIMPLEMENTED("clFinish: Unknown command");
           break;
         }   
+
+        if (event)
+          {
+            /* event callback handling 
+               just call functions in the same order they were added */
+            for (cb_ptr = (*event)->callback_list; cb_ptr; cb_ptr = cb_ptr->next)
+              {
+                cb_ptr->callback_function ((*event), cb_ptr->trigger_status, 
+                                           cb_ptr->user_data);
+              }
+            if ((*event)->implicit_event)
+              POname(clReleaseEvent) (*event);
+          }
     }
 
-  if (event)
-    {
-      /* event callback handling 
-         just call functions in the same order they were added */
-      for (cb_ptr = (*event)->callback_list; cb_ptr; cb_ptr = cb_ptr->next)
-        {
-          cb_ptr->callback_function ((*event), cb_ptr->trigger_status, 
-                                     cb_ptr->user_data);
-        }
-      if ((*event)->implicit_event)
-        POname(clReleaseEvent) (*event);
-    }
+
   
   // free the queue contents
   node = node_list;

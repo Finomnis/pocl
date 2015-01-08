@@ -24,6 +24,8 @@
 #ifndef POCL_IMAGE_UTIL_H
 #define POCL_IMAGE_UTIL_H
 
+#include "pocl_cl.h"
+
 #pragma GCC visibility push(hidden)
 
 extern cl_int 
@@ -36,6 +38,10 @@ pocl_get_image_information (cl_channel_order  ch_order,
                             cl_channel_type   ch_type,
                             cl_int*           host_channels,
                             cl_int*           host_elem_size);
+
+extern cl_int
+pocl_check_device_supports_image(const cl_mem image,
+                                 const cl_command_queue command_queue);
 
 extern cl_int
 pocl_write_image(cl_mem               image,

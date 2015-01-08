@@ -26,7 +26,7 @@
 #include <sstream>
 #include <iostream>
 
-#if (defined LLVM_3_1 or defined LLVM_3_2)
+#if (defined LLVM_3_1 || defined LLVM_3_2)
 #include "llvm/Metadata.h"
 #include "llvm/Constants.h"
 #include "llvm/Module.h"
@@ -43,6 +43,7 @@
 #include "WorkitemHandler.h"
 #include "Kernel.h"
 #include "DebugHelpers.h"
+#include "pocl.h"
 
 //#define DEBUG_REFERENCE_FIXING
 
@@ -81,20 +82,34 @@ WorkitemHandler::Initialize(Kernel *K) {
   if (size_info) {
     for (unsigned i = 0, e = size_info->getNumOperands(); i != e; ++i) {
       llvm::MDNode *KernelSizeInfo = size_info->getOperand(i);
-      if (KernelSizeInfo->getOperand(0) == K) {
-        LocalSizeX = (llvm::cast<ConstantInt>(
-          KernelSizeInfo->getOperand(1)))->getLimitedValue();
-        LocalSizeY = (llvm::cast<ConstantInt>(
-          KernelSizeInfo->getOperand(2)))->getLimitedValue();
-        LocalSizeZ = (llvm::cast<ConstantInt>(
-          KernelSizeInfo->getOperand(3)))->getLimitedValue();
-      }
+#ifdef LLVM_OLDER_THAN_3_6
+      if (KernelSizeInfo->getOperand(0) != K) 
+        continue;
+      LocalSizeX = (llvm::cast<ConstantInt>(KernelSizeInfo->getOperand(1)))->getLimitedValue();
+      LocalSizeY = (llvm::cast<ConstantInt>(KernelSizeInfo->getOperand(2)))->getLimitedValue();
+      LocalSizeZ = (llvm::cast<ConstantInt>(KernelSizeInfo->getOperand(3)))->getLimitedValue();
+#else
+      if (dyn_cast<ValueAsMetadata>(
+        KernelSizeInfo->getOperand(0).get())->getValue() != K) 
+        continue;
+
+      LocalSizeX = (llvm::cast<ConstantInt>(
+                     llvm::dyn_cast<ConstantAsMetadata>(
+                       KernelSizeInfo->getOperand(1))->getValue()))->getLimitedValue();
+      LocalSizeY = (llvm::cast<ConstantInt>(
+                     llvm::dyn_cast<ConstantAsMetadata>(
+                       KernelSizeInfo->getOperand(2))->getValue()))->getLimitedValue();
+      LocalSizeZ = (llvm::cast<ConstantInt>(
+                     llvm::dyn_cast<ConstantAsMetadata>(
+                       KernelSizeInfo->getOperand(3))->getValue()))->getLimitedValue();
+#endif
+      break;
     }
   }
 
   llvm::Type *localIdType; 
   size_t_width = 0;
-#if (defined LLVM_3_2 or defined LLVM_3_3 or defined LLVM_3_4)
+#if (defined LLVM_3_2 || defined LLVM_3_3 || defined LLVM_3_4)
   if (M->getPointerSize() == llvm::Module::Pointer64)
     size_t_width = 64;
   else if (M->getPointerSize() == llvm::Module::Pointer32)
@@ -118,7 +133,7 @@ WorkitemHandler::Initialize(Kernel *K) {
 }
 
 
-#if (defined LLVM_3_2 or defined LLVM_3_3 or defined LLVM_3_4)
+#if (defined LLVM_3_2 || defined LLVM_3_3 || defined LLVM_3_4)
 bool
 WorkitemHandler::dominatesUse
 (llvm::DominatorTree *DT, Instruction &I, unsigned i) {
@@ -184,7 +199,7 @@ WorkitemHandler::dominatesUse
    the old one. This should ensure the reachability without 
    the costly dominance analysis.
 */
-#if (defined LLVM_3_2 or defined LLVM_3_3 or defined LLVM_3_4)
+#if (defined LLVM_3_2 || defined LLVM_3_3 || defined LLVM_3_4)
 bool
 WorkitemHandler::fixUndominatedVariableUses(llvm::DominatorTree *DT, 
                                             llvm::Function &F) 

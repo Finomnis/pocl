@@ -36,7 +36,7 @@ AT_CLEANUP
 #POAT_VCL_CHECK_RUN([examples/tutorial/blas1])
 #AT_CLEANUP
 #
-POAT_VCL_SETUP([bandwidth-reduction])
+POAT_VCL_SETUP([bandwidth-reduction], [long])
 POAT_VCL_CHECK_RUN([examples/tutorial/bandwidth-reduction])
 AT_CLEANUP
 
@@ -90,6 +90,8 @@ AT_CLEANUP
 #AT_CLEANUP
 #
 POAT_VCL_SETUP([global_variables-test-opencl])
+#This spinns on LLVM 3.6
+AT_SKIP_IF([egrep -q "#define LLVM_3_6" $abs_top_builddir/config.h])
 POAT_VCL_CHECK_RUN(tests/global_variables-test-opencl)
 AT_CLEANUP
 
@@ -174,7 +176,6 @@ AT_CLEANUP
 POAT_VCL_SETUP([vector_double-test-opencl])
 #fails with "Could not find a dominating alternative variable"
 #Note: uncomment a few other tests if fixing this
-AT_XFAIL_IF([true])
 POAT_VCL_CHECK_RUN(tests/vector_double-test-opencl)
 AT_CLEANUP
 

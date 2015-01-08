@@ -32,9 +32,14 @@
 #include <assert.h>
 #include <string.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <dev_image.h>
-#include <sys/time.h>
+
+#ifndef _MSC_VER
+#  include <sys/time.h>
+#  include <unistd.h>
+#else
+#  include "vccompat.hpp"
+#endif
 
 #define max(a,b) (((a) > (b)) ? (a) : (b))
 
@@ -216,10 +221,17 @@ pocl_basic_init_device_infos(struct _cl_device_id* dev)
   dev->vendor_id = 0;
   dev->max_compute_units = 0;
   dev->max_work_item_dimensions = 3;
-  dev->max_work_item_sizes[0] = CL_INT_MAX;
-  dev->max_work_item_sizes[1] = CL_INT_MAX;
-  dev->max_work_item_sizes[2] = CL_INT_MAX;
-  dev->max_work_group_size = 1024;
+  dev->max_work_item_sizes[0] = SIZE_MAX;
+  dev->max_work_item_sizes[1] = SIZE_MAX;
+  dev->max_work_item_sizes[2] = SIZE_MAX;
+  /*
+    The hard restriction will be the context data which is
+    stored in stack that can be as small as 8K in Linux.
+    Thus, there should be enough work-items alive to fill up
+    the SIMD lanes times the vector units, but not more than
+    that to avoid stack overflow and cache trashing.
+  */
+  dev->max_work_group_size = 1024*4;
   dev->preferred_wg_size_multiple = 8;
   dev->preferred_vector_width_char = POCL_DEVICES_PREFERRED_VECTOR_WIDTH_CHAR;
   dev->preferred_vector_width_short = POCL_DEVICES_PREFERRED_VECTOR_WIDTH_SHORT;
@@ -358,9 +370,10 @@ pocl_basic_malloc (void *device_data, cl_mem_flags flags,
 
   if (flags & CL_MEM_COPY_HOST_PTR)
     {
-      if (posix_memalign (&b, MAX_EXTENDED_ALIGNMENT, size) == 0)
+      b = pocl_memalign_alloc(MAX_EXTENDED_ALIGNMENT, size);
+      if (b != NULL)
         {
-          memcpy (b, host_ptr, size);
+          memcpy(b, host_ptr, size);
           return b;
         }
       
@@ -371,8 +384,8 @@ pocl_basic_malloc (void *device_data, cl_mem_flags flags,
     {
       return host_ptr;
     }
-
-  if (posix_memalign (&b, MAX_EXTENDED_ALIGNMENT, size) == 0)
+  b = pocl_memalign_alloc(MAX_EXTENDED_ALIGNMENT, size);
+  if (b != NULL)
     return b;
   
   return NULL;
@@ -392,9 +405,12 @@ pocl_basic_alloc_mem_obj (cl_device_id device, cl_mem mem_obj)
         {
           b = mem_obj->mem_host_ptr;
         }
-      else if (posix_memalign (&b, MAX_EXTENDED_ALIGNMENT, 
-                               mem_obj->size) != 0)
-        return CL_MEM_OBJECT_ALLOCATION_FAILURE;
+      else
+        {
+          b = pocl_memalign_alloc(MAX_EXTENDED_ALIGNMENT, mem_obj->size);
+          if (b == NULL)
+            return CL_MEM_OBJECT_ALLOCATION_FAILURE;
+        }
 
       if (flags & CL_MEM_COPY_HOST_PTR)
         memcpy (b, mem_obj->mem_host_ptr, mem_obj->size);
@@ -416,7 +432,7 @@ pocl_basic_free (void *data, cl_mem_flags flags, void *ptr)
   if (flags & CL_MEM_USE_HOST_PTR)
     return;
   
-  free (ptr);
+  POCL_MEM_FREE(ptr);
 }
 
 void
@@ -446,7 +462,6 @@ pocl_basic_run
   struct data *d;
   const char *module_fn;
   char workgroup_string[WORKGROUP_STRING_LENGTH];
-  unsigned device;
   struct pocl_argument *al;
   size_t x, y, z;
   unsigned i;
@@ -458,18 +473,9 @@ pocl_basic_run
 
   d->current_kernel = kernel;
 
-  /* Find which device number within the context correspond
-     to current device.  */
-  for (i = 0; i < kernel->context->num_devices; ++i)
-    {
-      if (kernel->context->devices[i]->data == data)
-        {
-          device = i;
-          break;
-        }
-    }
-
-  void *arguments[kernel->num_args + kernel->num_locals];
+  void **arguments = (void**)malloc(
+      sizeof(void*) * (kernel->num_args + kernel->num_locals)
+    );
 
   /* Process the kernel arguments. Convert the opaque buffer
      pointers to real device pointers, allocate dynamic local 
@@ -494,12 +500,12 @@ pocl_basic_run
               *(void **)arguments[i] = NULL;
             }
           else
-            arguments[i] = &((*(cl_mem *) (al->value))->device_ptrs[device].mem_ptr);
+            arguments[i] = &((*(cl_mem *) (al->value))->device_ptrs[cmd->device->dev_id].mem_ptr);
         }
       else if (kernel->arg_info[i].type == POCL_ARG_TYPE_IMAGE)
         {
           dev_image_t di;
-          fill_dev_image_t (&di, al, device);
+          fill_dev_image_t (&di, al, cmd->device);
 
           void* devptr = pocl_basic_malloc (data, 0, sizeof(dev_image_t), NULL);
           arguments[i] = malloc (sizeof (void *));
@@ -549,17 +555,17 @@ pocl_basic_run
       if (kernel->arg_info[i].is_local)
         {
           pocl_basic_free (data, 0, *(void **)(arguments[i]));
-          free (arguments[i]);
+          POCL_MEM_FREE(arguments[i]);
         }
       else if (kernel->arg_info[i].type == POCL_ARG_TYPE_IMAGE)
         {
           pocl_basic_free (data, 0, *(void **)(arguments[i]));
-          free (arguments[i]);            
+          POCL_MEM_FREE(arguments[i]);
         }
       else if (kernel->arg_info[i].type == POCL_ARG_TYPE_SAMPLER || 
                (kernel->arg_info[i].type == POCL_ARG_TYPE_POINTER && *(void**)arguments[i] == NULL))
         {
-          free (arguments[i]);
+          POCL_MEM_FREE(arguments[i]);
         }
     }
   for (i = kernel->num_args;
@@ -567,8 +573,9 @@ pocl_basic_run
        ++i)
     {
       pocl_basic_free(data, 0, *(void **)(arguments[i]));
-      free (arguments[i]);
+      POCL_MEM_FREE(arguments[i]);
     }
+  free(arguments);
 }
 
 void
@@ -662,11 +669,11 @@ pocl_basic_read_rect (void *data,
 {
   char const *__restrict const adjusted_device_ptr = 
     (char const*)device_ptr +
-    buffer_origin[0] + buffer_row_pitch * (buffer_origin[1] + buffer_slice_pitch * buffer_origin[2]);
+      buffer_origin[2] * buffer_slice_pitch + buffer_origin[1] * buffer_row_pitch + buffer_origin[0];
   char *__restrict__ const adjusted_host_ptr = 
     (char*)host_ptr +
-    host_origin[0] + host_row_pitch * (host_origin[1] + host_slice_pitch * host_origin[2]);
-  
+      host_origin[2] * host_slice_pitch + host_origin[1] * host_row_pitch + host_origin[0];
+
   size_t j, k;
   
   /* TODO: handle overlaping regions */
@@ -713,23 +720,35 @@ pocl_basic_map_mem (void *data, void *buf_ptr,
   /* All global pointers of the pthread/CPU device are in 
      the host address space already, and up to date. */
   if (host_ptr != NULL) return host_ptr;
-  return buf_ptr + offset;
+  return (char*)buf_ptr + offset;
 }
 
 void
 pocl_basic_uninit (cl_device_id device)
 {
   struct data *d = (struct data*)device->data;
-  free (d);
+  POCL_MEM_FREE(d);
   device->data = NULL;
 }
 
 cl_ulong
 pocl_basic_get_timer_value (void *data) 
 {
+#ifndef _MSC_VER
   struct timeval current;
   gettimeofday(&current, NULL);  
   return (current.tv_sec * 1000000 + current.tv_usec)*1000;
+#else
+  FILETIME ft;
+  cl_ulong tmpres = 0;
+  GetSystemTimeAsFileTime(&ft);
+  tmpres |= ft.dwHighDateTime;
+  tmpres <<= 32;
+  tmpres |= ft.dwLowDateTime;
+  tmpres -= 11644473600000000Ui64;
+  tmpres /= 10;
+  return tmpres;
+#endif
 }
 
 cl_int 
@@ -779,14 +798,14 @@ void check_compiler_cache (_cl_command_node *cmd)
           return;
         }
     }
-  ci = malloc (sizeof (compiler_cache_item));
+  ci = (compiler_cache_item*) malloc (sizeof (compiler_cache_item));
   ci->next = NULL;
   ci->tmp_dir = strdup(cmd->command.run.tmp_dir);
   ci->function_name = strdup (cmd->command.run.kernel->function_name);
   const char* module_fn = llvm_codegen (cmd->command.run.tmp_dir,
                                         cmd->command.run.kernel,
                                         cmd->device);
-  dlhandle = lt_dlopen (module_fn);     
+  dlhandle = lt_dlopen (module_fn);
   if (dlhandle == NULL)
     {
       printf ("pocl error: lt_dlopen(\"%s\") failed with '%s'.\n", 

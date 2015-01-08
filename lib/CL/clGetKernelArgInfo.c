@@ -21,35 +21,7 @@
    THE SOFTWARE.
 */
 
-#include "pocl_cl.h"
-#include <string.h>
-
-
-
-#define POCL_RETURN_KERNEL_INFO(__TYPE__, __VALUE__)                    \
-  {                                                                     \
-    size_t const value_size = sizeof(__TYPE__);                         \
-    if (param_value) {                                                  \
-      if (param_value_size < value_size) return CL_INVALID_VALUE;       \
-      *(__TYPE__*)param_value = __VALUE__;                              \
-    }                                                                   \
-    if (param_value_size_ret)                                           \
-      *param_value_size_ret = value_size;                               \
-    return CL_SUCCESS;                                                  \
-  }
-
-#define POCL_RETURN_KERNEL_INFO_STR(__STR__)                        \
-  {                                                                 \
-    size_t const value_size = strlen(__STR__) + 1;                  \
-    if (param_value) {                                              \
-      if (param_value_size < value_size) return CL_INVALID_VALUE;   \
-      memcpy(param_value, __STR__, value_size);                     \
-    }                                                               \
-    if (param_value_size_ret)                                       \
-      *param_value_size_ret = value_size;                           \
-    return CL_SUCCESS;                                              \
-  }                                                                 \
-
+#include "pocl_util.h"
 
 
 CL_API_ENTRY cl_int CL_API_CALL
@@ -60,33 +32,34 @@ POname(clGetKernelArgInfo)(cl_kernel      kernel ,
                 void *         param_value ,
                 size_t *       param_value_size_ret) CL_API_SUFFIX__VERSION_1_2
 {
-  if (!kernel)
-    return CL_INVALID_KERNEL;
-  if (arg_indx >= kernel->num_args)
-    return CL_INVALID_ARG_INDEX;
+  POCL_RETURN_ERROR_COND((kernel == NULL), CL_INVALID_KERNEL);
+
+  POCL_RETURN_ERROR_ON((arg_indx >= kernel->num_args), CL_INVALID_ARG_INDEX,
+    "This kernel has %u args, cannot getInfo on arg %u\n",
+    (unsigned)kernel->num_args, (unsigned)arg_indx);
 
   struct pocl_argument_info *arg = &kernel->arg_info[arg_indx];
   switch (param_name) {
     case CL_KERNEL_ARG_ADDRESS_QUALIFIER:
       if (!(kernel->has_arg_metadata & POCL_HAS_KERNEL_ARG_ADDRESS_QUALIFIER))
         return CL_KERNEL_ARG_INFO_NOT_AVAILABLE;
-      POCL_RETURN_KERNEL_INFO(cl_kernel_arg_address_qualifier, arg->address_qualifier);
+      POCL_RETURN_GETINFO(cl_kernel_arg_address_qualifier, arg->address_qualifier);
     case CL_KERNEL_ARG_ACCESS_QUALIFIER:
       if (!(kernel->has_arg_metadata & POCL_HAS_KERNEL_ARG_ACCESS_QUALIFIER))
         return CL_KERNEL_ARG_INFO_NOT_AVAILABLE;
-      POCL_RETURN_KERNEL_INFO(cl_kernel_arg_access_qualifier, arg->access_qualifier);
+      POCL_RETURN_GETINFO(cl_kernel_arg_access_qualifier, arg->access_qualifier);
     case CL_KERNEL_ARG_TYPE_NAME:
       if (!(kernel->has_arg_metadata & POCL_HAS_KERNEL_ARG_TYPE_NAME))
         return CL_KERNEL_ARG_INFO_NOT_AVAILABLE;
-      POCL_RETURN_KERNEL_INFO_STR(arg->type_name);
+      POCL_RETURN_GETINFO_STR(arg->type_name);
     case CL_KERNEL_ARG_TYPE_QUALIFIER:
       if (!(kernel->has_arg_metadata & POCL_HAS_KERNEL_ARG_TYPE_QUALIFIER))
         return CL_KERNEL_ARG_INFO_NOT_AVAILABLE;
-      POCL_RETURN_KERNEL_INFO(cl_kernel_arg_type_qualifier, arg->type_qualifier);
+      POCL_RETURN_GETINFO(cl_kernel_arg_type_qualifier, arg->type_qualifier);
     case CL_KERNEL_ARG_NAME:
       if (!(kernel->has_arg_metadata & POCL_HAS_KERNEL_ARG_NAME))
         return CL_KERNEL_ARG_INFO_NOT_AVAILABLE;
-      POCL_RETURN_KERNEL_INFO_STR(arg->name);
+      POCL_RETURN_GETINFO_STR(arg->name);
   }
   return CL_INVALID_VALUE;
 }

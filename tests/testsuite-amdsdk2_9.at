@@ -151,8 +151,6 @@ AT_CHECK_UNQUOTED([make test_DCT -sC $abs_top_builddir/examples/AMDSDK2.9 | grep
 AT_CLEANUP
 
 POAT_AMDSDK_SETUP([devicefission])
-# Error: clGetDeviceInfo failed. (maxSubDevices) Error code : CL_INVALID_VALUE
-AT_XFAIL_IF(true)
 AT_CHECK_UNQUOTED([make test_DeviceFission -sC $abs_top_builddir/examples/AMDSDK2.9 | grep Passed], 0, 
 [Passed!
 ])
@@ -167,8 +165,6 @@ AT_CHECK_UNQUOTED([make test_DeviceFission11Ext -sC $abs_top_builddir/examples/A
 AT_CLEANUP
 
 POAT_AMDSDK_SETUP([dwthaar1d])
-# Failed (verification error). 
-AT_XFAIL_IF(true)
 AT_CHECK_UNQUOTED([make test_DwtHaar1D -sC $abs_top_builddir/examples/AMDSDK2.9 | grep Passed], 0, 
 [Passed!
 ])
@@ -336,7 +332,7 @@ AT_SKIP_IF([ ! test -e $abs_top_builddir/examples/AMDSDK2.9/AMD-APP-SDK-v2.9-RC-
 # undefined symbol: _Z7std_fmaDv4_fS_S_ with VML
 AT_CHECK_UNQUOTED([make test_Mandelbrot -sC $abs_top_builddir/examples/AMDSDK2.9 | grep Passed], 0, 
 [Passed!
-])
+], ignore)
 AT_CLEANUP
 
 POAT_AMDSDK_SETUP([matrixmuldouble])
@@ -346,8 +342,6 @@ AT_CHECK_UNQUOTED([make test_MatrixMulDouble -sC $abs_top_builddir/examples/AMDS
 AT_CLEANUP
 
 POAT_AMDSDK_SETUP([matrixmulimage])
-# pocl error: encountered unimplemented part of the OpenCL specs in clCreateImage2D.c:119
-#AT_XFAIL_IF(true)
 AT_CHECK_UNQUOTED([make test_MatrixMulImage -sC $abs_top_builddir/examples/AMDSDK2.9 | grep Passed], 0, 
 [Passed!
 ], ignore)

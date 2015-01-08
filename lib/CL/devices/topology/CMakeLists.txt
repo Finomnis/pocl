@@ -23,5 +23,8 @@
 #
 #=============================================================================
 
-add_compile_options(${HWLOC_CFLAGS})
+add_compile_options(${Hwloc_CFLAGS})
+if(MSVC)
+  set_source_files_properties( pocl_topology.c pocl_topology.h PROPERTIES LANGUAGE CXX )
+endif(MSVC)
 add_library("pocl-devices-topology" OBJECT pocl_topology.c pocl_topology.h)

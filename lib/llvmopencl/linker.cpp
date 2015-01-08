@@ -13,6 +13,8 @@
  */
 
 #include "config.h"
+#include "pocl.h"
+
 #ifdef LLVM_3_2
 #include "llvm/Function.h"
 #include "llvm/Instructions.h"
@@ -245,7 +247,7 @@ link(llvm::Module *krn, const llvm::Module *lib)
          ai++) {
         DB_PRINT(" %s\n", ai->getName().data());
         GlobalAlias *GA=
-#if (defined LLVM_3_2 or defined LLVM_3_3 or defined LLVM_3_4)
+#if (defined LLVM_3_2 || defined LLVM_3_3 || defined LLVM_3_4)
             new GlobalAlias(ai->getType(), ai->getLinkage(),
                             ai->getName(), NULL, krn);
 #else
@@ -278,7 +280,11 @@ link(llvm::Module *krn, const llvm::Module *lib)
         DB_PRINT(" %s:\n", NMD.getName().data());
         NamedMDNode *NewNMD=krn->getOrInsertNamedMetadata(NMD.getName());
         for (unsigned i=0, e=NMD.getNumOperands(); i != e; ++i)
+#ifdef LLVM_OLDER_THAN_3_6
             NewNMD->addOperand(MapValue(NMD.getOperand(i), vvm));
+#else
+            NewNMD->addOperand(MapMetadata(NMD.getOperand(i), vvm));
+#endif
     }
 }
 
