@@ -73,6 +73,12 @@ extern "C" {
  */
 #define ADDITIONAL_ALLOCATION_MAX_MB 100
 
+/* Always create regions with at least this size to avoid allocating
+   small regions when there are lots of small buffers, which would counter 
+   a purpose of having own buffer management. It would end up having a lot of
+   small regions with linear searches over them.  */
+#define NEW_REGION_MIN_MB 10
+
 /* Whether to immediately free a region in case the last chunk was
    deallocated. If 0, it can reuse the same region over multiple kernels. */
 #define FREE_EMPTY_REGIONS 0
@@ -81,7 +87,7 @@ extern "C" {
 #endif
 
 #define COMMAND_LENGTH 2048
-#define WORKGROUP_STRING_LENGTH 128
+#define WORKGROUP_STRING_LENGTH 256
 
 /* The name of the environment variable used to force a certain max thread count
    for the thread execution. */
@@ -102,7 +108,7 @@ struct thread_arguments
     void*** wg_arguments;
     char* initialized;
     cl_kernel kernel;
-    unsigned int device;
+    cl_device_id device;
 };
 
 #ifdef CUSTOM_BUFFER_ALLOCATOR  
@@ -149,7 +155,7 @@ pocl_hpx_init_device_ops(struct pocl_device_ops *ops)
   ops->read = pocl_hpx_read;
   ops->write = pocl_hpx_write;
   ops->copy = pocl_hpx_copy;
-  ops->copy_rect = pocl_hpx_copy_rect;
+  ops->copy_rect = pocl_basic_copy_rect;
   ops->run = pocl_hpx_run;
   ops->compile_submitted_kernels = pocl_basic_compile_submitted_kernels;
 
@@ -172,11 +178,9 @@ pocl_hpx_init_device_infos(struct _cl_device_id* dev)
   pocl_basic_init_device_infos(dev);
 
   dev->type = CL_DEVICE_TYPE_CPU;
-  /* This could be SIZE_T_MAX, but setting it to INT_MAX should suffice, */
-  /* and may avoid errors in user code that uses int instead of size_t */
-  dev->max_work_item_sizes[0] = 1024;
-  dev->max_work_item_sizes[1] = 1024;
-  dev->max_work_item_sizes[2] = 1024;
+  dev->max_work_item_sizes[0] = SIZE_MAX;
+  dev->max_work_item_sizes[1] = SIZE_MAX;
+  dev->max_work_item_sizes[2] = SIZE_MAX;
 
 }
 
@@ -268,11 +272,12 @@ pocl_hpx_uninit (cl_device_id device)
     {
       DL_DELETE(d->mem_regions->mem_regions, region);
       free ((void*)region->chunks->start_address);
-      free (region);    
+      region->chunks->start_address = 0;
+      POCL_MEM_FREE(region);    
     }
   d->mem_regions->mem_regions = NULL;
 #endif  
-  free (d);
+  POCL_MEM_FREE(d);
   device->data = NULL;
 }
 
@@ -298,17 +303,21 @@ allocate_aligned_buffer (struct data* d, void **memptr, size_t alignment, size_t
          Allocate a larger chunk to avoid allocation overheads
          later on. */
       size_t region_size = 
-        std::max(std::min(size + ADDITIONAL_ALLOCATION_MAX_MB * 1024 * 1024, 
-                size * ALLOCATION_MULTIPLE), size);
+        std::max(std::max(
+            std::min(size + ADDITIONAL_ALLOCATION_MAX_MB * 1024 * 1024, 
+                     size * ALLOCATION_MULTIPLE), size),
+                NEW_REGION_MIN_MB * 1024 * 1024);
 
       assert (region_size >= size);
 
       void* space = NULL;
-      if ((posix_memalign (&space, alignment, region_size)) != 0)
+      space = pocl_memalign_alloc(alignment, region_size);
+      if (space == NULL)
         {
           /* Failed to allocate a large region. Fall back to allocating 
              the smallest possible region for the buffer. */
-          if ((posix_memalign (&space, alignment, size)) != 0) 
+          space = pocl_memalign_alloc(alignment, size);
+          if (space == NULL)
             {
               BA_UNLOCK (d->mem_regions->mem_regions_lock);
               return ENOMEM;
@@ -342,7 +351,8 @@ allocate_aligned_buffer (struct data* d, void **memptr, size_t alignment, size_t
 static int
 allocate_aligned_buffer (struct data* d, void **memptr, size_t alignment, size_t size) 
 {
-  return posix_memalign (memptr, alignment, size);
+  *memptr = pocl_memalign_alloc(alignment, size);
+  return (((*memptr) == NULL)? -1: 0);
 }
 
 #endif
@@ -431,7 +441,8 @@ pocl_hpx_free (void *device_data, cl_mem_flags flags, void *ptr)
          memory region at once. */
       DL_DELETE(d->mem_regions->mem_regions, region);
       free ((void*)region->last_chunk->start_address);
-      free (region);    
+      region->last_chunk->start_address = 0;
+      POCL_MEM_FREE(region);
     }  
   BA_UNLOCK(region->lock);
   BA_UNLOCK(d->mem_regions->mem_regions_lock);
@@ -443,10 +454,10 @@ pocl_hpx_free (void *device_data, cl_mem_flags flags, void *ptr)
 void
 pocl_hpx_free (void *data, cl_mem_flags flags, void *ptr)
 {
-  if (flags & CL_MEM_COPY_HOST_PTR)
+  if (flags & CL_MEM_USE_HOST_PTR)
     return;
   
-  free (ptr);
+  POCL_MEM_FREE(ptr);
 }
 #endif
 
@@ -476,36 +487,6 @@ pocl_hpx_copy (void *data, const void *src_ptr, void *__restrict__ dst_ptr, size
     return;
   
   memcpy (dst_ptr, src_ptr, cb);
-}
-
-void
-pocl_hpx_copy_rect (void *data,
-                        const void *__restrict const src_ptr,
-                        void *__restrict__ const dst_ptr,
-                        const size_t *__restrict__ const src_origin,
-                        const size_t *__restrict__ const dst_origin, 
-                        const size_t *__restrict__ const region,
-                        size_t const src_row_pitch,
-                        size_t const src_slice_pitch,
-                        size_t const dst_row_pitch,
-                        size_t const dst_slice_pitch)
-{
-  char const *__restrict const adjusted_src_ptr = 
-    (char const*)src_ptr +
-    src_origin[0] + src_row_pitch * (src_origin[1] + src_slice_pitch * src_origin[2]);
-  char *__restrict__ const adjusted_dst_ptr = 
-    (char*)dst_ptr +
-    dst_origin[0] + dst_row_pitch * (dst_origin[1] + dst_slice_pitch * dst_origin[2]);
-  
-  size_t j, k;
-
-  /* TODO: handle overlaping regions */
-  
-  for (k = 0; k < region[2]; ++k)
-    for (j = 0; j < region[1]; ++j)
-      memcpy (adjusted_dst_ptr + dst_row_pitch * j + dst_slice_pitch * k,
-              adjusted_src_ptr + src_row_pitch * j + src_slice_pitch * k,
-              region[0]);
 }
 
 void *
@@ -543,8 +524,6 @@ pocl_hpx_run
 (void* data,
  _cl_command_node* cmd)
 {
-    unsigned int device = 0;
-    cl_device_id device_ptr;
     cl_kernel kernel = cmd->command.run.kernel;
     size_t num_hpx_workers = hpx::get_os_thread_count();
     static hpx::threads::executors::default_executor kernel_executor(
@@ -563,22 +542,11 @@ pocl_hpx_run
         initialized[i] = 0;
     }
 
-    /* Find which device number within the context corresponds
-       to current device. */
-    for (int i = 0; i < kernel->context->num_devices; ++i)
-    {
-        if (kernel->context->devices[i]->data == data)
-        {
-            device = i;
-            device_ptr = kernel->context->devices[i];
-            break;
-        }
-    }
  
     // initialize thread_arguments 
     struct thread_arguments ta;
     ta.data = data;
-    ta.device = device;
+    ta.device = cmd->device;
     ta.pc_global = &cmd->command.run.pc;
     ta.workgroup = cmd->command.run.wg;
     ta.kernel_args = cmd->command.run.arguments;
@@ -691,7 +659,7 @@ void workgroup_thread (void* p, nd_pos const& gid)
                   else
                     {
                       arguments[i] = 
-                        &((*(cl_mem *)(al->value))->device_ptrs[ta->device].mem_ptr);
+                        &((*(cl_mem *)(al->value))->device_ptrs[ta->device->dev_id].mem_ptr);
                     }
                 }
                 else if (kernel->arg_info[i].type == POCL_ARG_TYPE_IMAGE)
