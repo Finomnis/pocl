@@ -468,7 +468,7 @@ pocl_hpx_read (void *data, void *host_ptr, const void *device_ptr,
   if (host_ptr == device_ptr)
     return;
 
-  memcpy (host_ptr, device_ptr + offset, cb);
+  memcpy (host_ptr, static_cast<char *>(device_ptr) + offset, cb);
 }
 
 void
@@ -478,7 +478,7 @@ pocl_hpx_write (void *data, const void *host_ptr, void *device_ptr,
   if (host_ptr == device_ptr)
     return;
   
-  memcpy (device_ptr, host_ptr + offset, cb);
+  memcpy (device_ptr, static_cast<char *>(host_ptr) + offset, cb);
 }
 
 
@@ -489,7 +489,8 @@ pocl_hpx_copy (void *data, const void *src_ptr, size_t src_offset,
   if (src_ptr == dst_ptr)
     return;
   
-  memcpy (dst_ptr + dst_offset, src_ptr + src_offset, cb);
+  memcpy (static_cast<char *>(dst_ptr) + dst_offset,
+          static_cast<char *>(src_ptr) + src_offset, cb);
 }
 
 void *
