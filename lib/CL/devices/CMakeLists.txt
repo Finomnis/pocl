@@ -26,6 +26,7 @@
 add_subdirectory("pthread")
 add_subdirectory("basic")
 add_subdirectory("topology")
+set(POCL_DEVICES_LINK_LIST ${Hwloc_LDFLAGS})
 
 set(POCL_DEVICES_OBJS "$<TARGET_OBJECTS:pocl-devices>"
       "$<TARGET_OBJECTS:pocl-devices-pthread>"
@@ -34,7 +35,9 @@ set(POCL_DEVICES_OBJS "$<TARGET_OBJECTS:pocl-devices>"
 
 if(ENABLE_TCE)
   add_subdirectory("tce")
+  include_directories(AFTER "tce")
   list(APPEND POCL_DEVICES_LINK_LIST ${TCE_LIBS})
+  list(APPEND POCL_DEVICES_OBJS "$<TARGET_OBJECTS:pocl-devices-tce-ttasim>")
 endif()
 
 if(ENABLE_SPU)

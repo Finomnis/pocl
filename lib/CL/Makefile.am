@@ -153,7 +153,11 @@ endif
 
 # The POCL_DEBUG output requires the clock_gettime and older glibs
 # have it in a separate lib.
+# Mac doesnt have lrt, or clock_gettime
+
+if HAVE_CLOCK_GETTIME
 libpocl_la_LIBADD += -lrt
+endif
 
 if BUILD_SPU
 libpocl_la_LIBADD += -lspe2
@@ -195,3 +199,5 @@ libOpenCL_la_LIBADD = ${libpocl_la_LIBADD}
 endif
 
 CLEANFILES = libOpenCL.la
+
+EXTRA_DIST = CMakeLists.txt

@@ -122,7 +122,7 @@ extern int pocl_debug_messages;
     do {                                                                      \
     if (pocl_debug_messages) {                                                \
       clock_gettime(CLOCK_REALTIME, &pocl_debug_timespec);                    \
-      fprintf(stderr, "[%li.%li] POCL: in function %s"                  \
+      fprintf(stderr, "[%li.%09li] POCL: in function %s"                  \
       " at line %u:", (long)pocl_debug_timespec.tv_sec, (long)pocl_debug_timespec.tv_nsec, \
         __func__, __LINE__);                                                  \
       fprintf(stderr, __VA_ARGS__);                                           \
@@ -133,7 +133,7 @@ extern int pocl_debug_messages;
     do {                                                                      \
     if (pocl_debug_messages) {                                                \
       clock_gettime(CLOCK_REALTIME, &pocl_debug_timespec);                    \
-      fprintf(stderr, "[%li.%li] POCL: " TYPE ERRCODE " in function %s"       \
+      fprintf(stderr, "[%li.%09li] POCL: " TYPE ERRCODE " in function %s"       \
       " at line %u: \n", (long)pocl_debug_timespec.tv_sec, (long)pocl_debug_timespec.tv_nsec, \
         __func__, __LINE__);                                                  \
       fprintf(stderr, __VA_ARGS__);                                           \
@@ -141,6 +141,15 @@ extern int pocl_debug_messages;
   } while(0)
 
   #else
+
+  #define POCL_MSG_PRINT_INFO(...)                                            \
+    do {                                                                      \
+    if (pocl_debug_messages) {                                                \
+      fprintf(stderr, "** POCL ** : in function %s"                           \
+      " at line %u:", __func__, __LINE__);                                    \
+      fprintf(stderr, __VA_ARGS__);                                           \
+    }                                                                         \
+  } while(0)
 
   #define POCL_MSG_PRINT(TYPE, ERRCODE, ...)                                  \
     do {                                                                      \
@@ -375,7 +384,8 @@ struct pocl_device_ops {
   cl_int (*alloc_mem_obj) (cl_device_id device, cl_mem mem_obj);
   void *(*create_sub_buffer) (void *data, void* buffer, size_t origin, size_t size);
   void (*free) (void *data, cl_mem_flags flags, void *ptr);
-  void (*read) (void *data, void *host_ptr, const void *device_ptr, size_t cb);
+  void (*read) (void *data, void *host_ptr, const void *device_ptr, 
+                size_t offset, size_t cb);
   void (*read_rect) (void *data, void *host_ptr, void *device_ptr,
                      const size_t *buffer_origin,
                      const size_t *host_origin, 
@@ -384,7 +394,8 @@ struct pocl_device_ops {
                      size_t buffer_slice_pitch,
                      size_t host_row_pitch,
                      size_t host_slice_pitch);
-  void (*write) (void *data, const void *host_ptr, void *device_ptr, size_t cb);
+  void (*write) (void *data, const void *host_ptr, void *device_ptr, 
+                 size_t offset, size_t cb);
   void (*write_rect) (void *data, const void *host_ptr, void *device_ptr,
                       const size_t *buffer_origin,
                       const size_t *host_origin, 
@@ -393,7 +404,8 @@ struct pocl_device_ops {
                       size_t buffer_slice_pitch,
                       size_t host_row_pitch,
                       size_t host_slice_pitch);
-  void (*copy) (void *data, const void *src_ptr,  void *__restrict__ dst_ptr, size_t cb);
+  void (*copy) (void *data, const void *src_ptr, size_t src_offset, 
+                void *__restrict__ dst_ptr, size_t dst_offset, size_t cb);
   void (*copy_rect) (void *data, const void *src_ptr, void *dst_ptr,
                      const size_t *src_origin,
                      const size_t *dst_origin, 

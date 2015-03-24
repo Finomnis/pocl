@@ -151,9 +151,9 @@ pocl_create_program_cache_dir(cl_program program)
       tmp_path = getenv("HOME");
 
       if (tmp_path)
-        snprintf(cache_path, CACHE_DIR_PATH_CHARS, "%s/.pocl/%s", tmp_path, hash_str);
+        snprintf(cache_path, CACHE_DIR_PATH_CHARS, "%s/.pocl/kcache/%s", tmp_path, hash_str);
       else
-        snprintf(cache_path, CACHE_DIR_PATH_CHARS, "/tmp/pocl/%s", hash_str);
+        snprintf(cache_path, CACHE_DIR_PATH_CHARS, "/tmp/pocl/kcache/%s", hash_str);
 #endif
     }
 
@@ -457,7 +457,7 @@ pocl_check_and_invalidate_cache (cl_program program,
           if ((*s_ptr) == '#')
             {
               /* Skip all the white-spaces between # & include */
-              for (ss_ptr = s_ptr+1; (*ss_ptr == ' '); ss_ptr++) ;
+              for (ss_ptr = s_ptr+1; *ss_ptr == ' '; ss_ptr++) ;
               
               if (strncmp(ss_ptr, "include", 7) == 0)
                 cache_dirty = 1;

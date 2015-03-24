@@ -95,6 +95,7 @@ typedef struct
 {
   void *host_ptr;
   const void *device_ptr;
+  size_t offset;
   size_t cb;
   cl_mem buffer;
 } _cl_command_read;
@@ -104,6 +105,7 @@ typedef struct
 {
   const void *host_ptr;
   void *device_ptr;
+  size_t offset;
   size_t cb;
   cl_mem buffer;
 } _cl_command_write;
@@ -113,7 +115,9 @@ typedef struct
 {
   void *data;
   void *src_ptr;
+  size_t src_offset;
   void *dst_ptr;
+  size_t dst_offset;
   size_t cb;
   cl_mem src_buffer;
   cl_mem dst_buffer;
@@ -197,6 +201,10 @@ typedef struct _cl_command_node_struct
     defined(LLVM_3_5)
 
 # define LLVM_OLDER_THAN_3_6 1
+# define LLVM_OLDER_THAN_3_7 1
+#elif (defined LLVM_3_6)
+
+# define LLVM_OLDER_THAN_3_7 1
 
 #endif
 

@@ -31,10 +31,12 @@
 
 SUBDIRS = example1 example1-spir32 example1-spir64 example2 example2a trig \
 	scalarwave standalone opencl-book-samples VexCL ViennaCL Rodinia Parboil \
-	AMD AMDSDK2.9 EinsteinToolkit piglit Halide
+	AMD AMDSDK2.9 EinsteinToolkit piglit Halide OpenCV CloverLeaf
 
 BASIC_EXAMPLES = example1 example1-spir32 example1-spir64 example2 example2a trig \
 	scalarwave standalone opencl-book-samples EinsteinToolkit
+
+EXTRA_DIST = CMakeLists.txt
 
 # The external examples which should be prepared only
 # once by calling "make prepare-examples".
@@ -66,6 +68,10 @@ EXAMPLES_TO_PREPARE += "Halide "
 endif
 if TEST_SUITE_CLOVERLEAF
 EXAMPLES_TO_PREPARE += "CloverLeaf "
+endif
+
+if TEST_SUITE_OPENCV
+EXAMPLES_TO_PREPARE += "OpenCV "
 endif
 
 prepare-examples:

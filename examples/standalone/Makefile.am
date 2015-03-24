@@ -22,7 +22,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 
-EXTRA_DIST = standalone.cl
+EXTRA_DIST = standalone.cl CMakeLists.txt
 
 noinst_DATA = $(EXTRA_DIST:.cl=.bc)
 
@@ -30,4 +30,5 @@ noinst_DATA = $(EXTRA_DIST:.cl=.bc)
 	../../scripts/pocl-standalone -h $(@:.bc=.h) -o $@ $<
 
 clean-local:
-	rm -f $(EXTRA_DIST:.cl=.bc) $(EXTRA_DIST:.cl=.h)
+	rm -f standalone.bc standalone.h
+

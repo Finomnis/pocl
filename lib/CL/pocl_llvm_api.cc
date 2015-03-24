@@ -23,14 +23,30 @@
    THE SOFTWARE.
 */
 
+#include "CompilerWarnings.h"
+IGNORE_COMPILER_WARNING("-Wunused-parameter")
+IGNORE_COMPILER_WARNING("-Wstrict-aliasing")
+
 #include "config.h"
 
 #include "clang/CodeGen/CodeGenAction.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/CompilerInvocation.h"
 #include "clang/Frontend/TextDiagnosticBuffer.h"
+
+// For some reason including pocl.h before including CodeGenAction.h
+// causes an error. Some kind of macro definition issue. To investigate.
+#include "pocl.h"
+
 #include "llvm/LinkAllPasses.h"
+#ifdef LLVM_OLDER_THAN_3_7
 #include "llvm/PassManager.h"
+#include "llvm/Target/TargetLibraryInfo.h"
+#else
+#include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/IR/LegacyPassManager.h"
+using llvm::legacy::PassManager;
+#endif
 #include "llvm/Bitcode/ReaderWriter.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
@@ -66,7 +82,6 @@
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Target/TargetMachine.h"
-#include "llvm/Target/TargetLibraryInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/SubtargetFeature.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
@@ -77,9 +92,13 @@
 #include <vector>
 #include <sstream>
 #include <string>
+#include <cstdio>
 
 #ifndef _MSC_VER
 #  include <unistd.h>
+#  include <sys/types.h>
+#  include <sys/stat.h>
+#  include <fcntl.h>
 #endif
 
 // Note - LLVM/Clang uses symbols defined in Khronos' headers in macros, 
@@ -104,6 +123,8 @@ using llvm::sys::fs::F_Binary;
 #define F_Binary llvm::sys::fs::F_None
 #endif
 
+
+POP_COMPILER_DIAGS
 
 /**
  * Use one global LLVMContext across all LLVM bitcodes. This is because
@@ -138,22 +159,45 @@ static void InitializeLLVM();
 // to file on disk, if user has requested with environment
 // variable
 // TODO: what to do on errors?
+
+// this version simply rewrites the file
 static inline void
-write_temporary_file( const llvm::Module *mod,
+update_temporary_file( const llvm::Module *mod,
                       const char *filename )
 {
   tool_output_file *Out;
-  #if LLVM_VERSION_MAJOR==3 && LLVM_VERSION_MINOR<6
+#if LLVM_VERSION_MAJOR==3 && LLVM_VERSION_MINOR<6
   std::string ErrorInfo;
   Out = new tool_output_file(filename, ErrorInfo, F_Binary);
-  #else
+#else
   std::error_code ErrorInfo;
   Out = new tool_output_file(filename, ErrorInfo, F_Binary);
-  #endif
+#endif
   WriteBitcodeToFile(mod, Out->os());
   Out->keep();
   delete Out;
 }
+
+#if LLVM_VERSION_MAJOR==3 && LLVM_VERSION_MINOR<4
+#define write_temporary_file_fd(A,B,C) update_temporary_file(A,B)
+#else
+// this version works on already open filedescriptor
+static inline void
+write_temporary_file_fd( const llvm::Module *mod,
+                      const char *filename, int fd)
+{
+  tool_output_file *Out;
+#if LLVM_VERSION_MAJOR==3 && LLVM_VERSION_MINOR<4
+  std::string ErrorInfo;
+  Out = new tool_output_file(filename, ErrorInfo);
+#else
+  Out = new tool_output_file(filename, fd);
+#endif
+  WriteBitcodeToFile(mod, Out->os());
+  Out->keep();
+  delete Out;
+}
+#endif
 
 // Read input source to clang::FrontendOptions.
 // The source is contained in the program->source array,
@@ -194,7 +238,8 @@ int pocl_llvm_build_program(cl_program program,
                             const char* cache_dir,
                             const char* binary_file_name,
                             const char* device_tmpdir,
-                            const char* user_options)
+                            const char* user_options,
+                            int fd)
 
 {
   llvm::MutexGuard lockHolder(kernelCompilerLock);
@@ -416,7 +461,7 @@ int pocl_llvm_build_program(cl_program program,
     return CL_BUILD_PROGRAM_FAILURE;
 
   /* Always retain program.bc. Its required in clBuildProgram */
-  write_temporary_file(*mod, binary_file_name);
+  if(fd >= 0) write_temporary_file_fd(*mod, binary_file_name, fd);
 
   // FIXME: cannot delete action as it contains something the llvm::Module
   // refers to. We should create it globally, at compiler initialization time.
@@ -622,8 +667,10 @@ int pocl_llvm_get_kernel_metadata(cl_program program,
   DataLayout *TD = 0;
 #if (defined LLVM_3_2 || defined LLVM_3_3 || defined LLVM_3_4)
   const std::string &ModuleDataLayout = input->getDataLayout();
-#else
+#elif (defined LLVM_OLDER_THAN_3_7)
   const std::string &ModuleDataLayout = input->getDataLayout()->getStringRepresentation();
+#else
+  const std::string &ModuleDataLayout = input->getDataLayout().getStringRepresentation();
 #endif
   if (!ModuleDataLayout.empty())
     TD = new DataLayout(ModuleDataLayout);
@@ -762,9 +809,11 @@ int pocl_llvm_get_kernel_metadata(cl_program program,
   std::string kobj_s = descriptor_filename; 
   kobj_s += ".kernel_obj.c";
 
-  if(access(kobj_s.c_str(), F_OK) != 0)
+  int fd;
+  if ((fd = open(kobj_s.c_str(), (O_CREAT | O_EXCL | O_WRONLY),
+      (S_IRUSR | S_IWUSR))) >= 0)
     {
-      FILE *kobj_c = fopen( kobj_s.c_str(), "wc");
+      FILE *kobj_c = fdopen(fd, "w");
 
       fprintf(kobj_c, "\n #include <pocl_device.h>\n");
 
@@ -935,18 +984,25 @@ static PassManager& kernel_compiler_passes
 #endif
 
 #ifndef LLVM_3_2
+# ifdef LLVM_OLDER_THAN_3_7
   StringMap<llvm::cl::Option*> opts;
   llvm::cl::getRegisteredOptions(opts);
+# else
+  StringMap<llvm::cl::Option *>& opts = llvm::cl::getRegisteredOptions();
+# endif
 #endif
 
   PassManager *Passes = new PassManager();
 
+#if (!defined LLVM_3_2 && defined LLVM_OLDER_THAN_3_7)
   // Need to setup the target info for target specific passes. */
   TargetMachine *Machine = GetTargetMachine(device);
+
   // Add internal analysis passes from the target machine.
-#ifndef LLVM_3_2
   if (Machine != NULL)
     Machine->addAnalysisPasses(*Passes);
+#else
+# warning "TODO: Figure out how to add target machine passes in LLVM 3.7"
 #endif
 
   if (module_data_layout != "") {
@@ -954,7 +1010,7 @@ static PassManager& kernel_compiler_passes
     Passes->add(new DataLayout(module_data_layout));
 #elif (defined LLVM_3_5)
     Passes->add(new DataLayoutPass(DataLayout(module_data_layout)));
-#else
+#elif (defined LLVM_OLDER_THAN_3_7)
     Passes->add(new DataLayoutPass());
 #endif
   }
@@ -964,9 +1020,13 @@ static PassManager& kernel_compiler_passes
      Also the libcalls might be harmful for WG autovectorization where we 
      want to try to vectorize the code it converts to e.g. a memset or 
      a memcpy */
+#ifdef LLVM_OLDER_THAN_3_7
   TargetLibraryInfo *TLI = new TargetLibraryInfo(triple);
   TLI->disableAllFunctions();
   Passes->add(TLI);
+#else
+# warning "TODO: Figure out how to disable libcall generation in LLVM 3.7"
+#endif
 
   /* The kernel compiler passes to run, in order.
 
@@ -1264,21 +1324,22 @@ int pocl_llvm_generate_workgroup_function(cl_device_id device,
 
 #if (defined LLVM_3_2 || defined LLVM_3_3 || defined LLVM_3_4)
   kernel_compiler_passes(device, input->getDataLayout()).run(*input);
-#else
+#elif (defined LLVM_OLDER_THAN_3_7)
   kernel_compiler_passes(device,
                          input->getDataLayout()->getStringRepresentation())
+                        .run(*input);
+#else
+  kernel_compiler_passes(device,
+                         input->getDataLayout().getStringRepresentation())
                         .run(*input);
 #endif
 
   // TODO: don't write this once LLC is called via API, not system()
-  write_temporary_file(input, parallel_filename);
+  int fd;
+  if ((fd = open(parallel_filename, (O_CREAT | O_EXCL | O_WRONLY),
+      (S_IRUSR | S_IWUSR))) >= 0)
+    write_temporary_file_fd(input, parallel_filename, fd);
 
-#ifndef LLVM_3_2
-  // In LLVM 3.2 the Linker object deletes the associated Modules.
-  // If we delete here, it will crash.
-  /* OPTIMIZE: store the fully linked work-group function llvm::Module 
-     and pass it to code generation without writing to disk. */
-#endif
 
   return 0;
 }
@@ -1313,7 +1374,7 @@ void pocl_llvm_update_binaries (cl_program program) {
         program->devices[i]->cache_dir_name + "/" +
         POCL_PROGRAM_BC_FILENAME;
 
-      write_temporary_file((llvm::Module*)program->llvm_irs[i],
+      update_temporary_file((llvm::Module*)program->llvm_irs[i],
                            binary_filename.c_str()); 
 
       FILE *binary_file = fopen(binary_filename.c_str(), "r");
@@ -1395,14 +1456,19 @@ pocl_llvm_codegen(cl_kernel kernel,
     llvm::TargetMachine *target = GetTargetMachine(device);
     llvm::Module *input = ParseIRFile(infilename, Err, *GlobalContext());
 
-    llvm::PassManager PM;
+    PassManager PM;
+#ifdef LLVM_OLDER_THAN_3_7
     llvm::TargetLibraryInfo *TLI = new TargetLibraryInfo(triple);
     PM.add(TLI);
+#else
+    llvm::TargetLibraryInfoWrapperPass *TLIPass = new TargetLibraryInfoWrapperPass(triple);
+    PM.add(TLIPass);
+#endif
     if (target != NULL) {
 #if defined LLVM_3_2
       PM.add(new TargetTransformInfo(target->getScalarTargetTransformInfo(),
                                      target->getVectorTargetTransformInfo()));
-#else
+#elif (defined LLVM_OLDER_THAN_3_7)
       target->addAnalysisPasses(PM);
 #endif
     }
@@ -1420,7 +1486,7 @@ pocl_llvm_codegen(cl_kernel kernel,
     // TODO: better error check
     formatted_raw_ostream FOS(outfile.os());
     llvm::MCContext *mcc;
-    if(target->addPassesToEmitMC(PM, mcc, FOS, llvm::TargetMachine::CGFT_ObjectFile))
+    if(target->addPassesToEmitMC(PM, mcc, FOS))
         return 1;
 
     PM.run(*input);

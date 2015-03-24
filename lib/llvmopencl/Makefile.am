@@ -3,7 +3,7 @@
 # Makefile.am for pocl/lib/llvmopencl.
 # 
 # Copyright (c) 2011 Universidad Rey Juan Carlos
-#               2011-2014 Pekka Jääskeläinen 
+#               2011-2015 Pekka Jääskeläinen 
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -35,7 +35,7 @@ pkglib_LTLIBRARIES = llvmopencl.la
 
 AM_CXXFLAGS = -I@top_srcdir@/fix-include -I@top_srcdir@/include @LLVM_CXX_FLAGS@
 
-AM_LDFLAGS = -module -export-dynamic @LLVM_LDFLAGS@
+AM_LDFLAGS = -module -export-dynamic @LLVM_LDFLAGS@ -version-info ${KERNEL_COMPILER_LIB_VERSION}
 
 PASSES_SOURCES = Barrier.h						\
                         BarrierBlock.h BarrierBlock.cc				\
@@ -61,7 +61,7 @@ PASSES_SOURCES = Barrier.h						\
 						AutomaticLocals.cc ImplicitConditionalBarriers.cc \
 						ImplicitConditionalBarriers.h \
 						DebugHelpers.h DebugHelpers.cc \
-						linker.h
+						linker.h CompilerWarnings.hh
 
 #add compiler driver sources
 libllvmpasses_la_SOURCES = ${PASSES_SOURCES} linker.cpp
@@ -69,3 +69,5 @@ libllvmpasses_la_SOURCES = ${PASSES_SOURCES} linker.cpp
 # The offline compiler script (pocl-standalone) calls the kernel compiler passes 
 # from the command line, those require libllvmopencl.so.
 llvmopencl_la_SOURCES = ${PASSES_SOURCES}
+
+EXTRA_DIST = CMakeLists.txt

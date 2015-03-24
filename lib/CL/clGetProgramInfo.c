@@ -21,6 +21,7 @@
    THE SOFTWARE.
 */
 
+#include <string.h>
 #include "pocl_llvm.h"
 #include "pocl_util.h"
 
@@ -95,10 +96,38 @@ POname(clGetProgramInfo)(cl_program program,
         *param_value_size_ret = value_size;
       return CL_SUCCESS;
     }
+  case CL_PROGRAM_KERNEL_NAMES:
+    {
+      const char *kernel_names[32];
+      char *c_ptr;
+      int num_kernels = 0;
+      size_t size = 0;
+      num_kernels = pocl_llvm_get_kernel_names(program, kernel_names, 32);
+      for (i = 0; i < num_kernels; ++i)
+        {
+          if (size + strlen (kernel_names[i]) + 1 >= param_value_size)
+            break;
+          size += strlen (kernel_names[i]) + 1;
+          
+          if (i == 0)
+            memcpy (param_value, kernel_names[i], strlen(kernel_names[i])+1);
+          else
+            strcat((char*)param_value, kernel_names[i]);
+          if (i != num_kernels - 1)
+            strcat ((char*)param_value, ";");
+        }
+
+      if (param_value_size_ret)
+        *param_value_size_ret = size;      
+      return CL_SUCCESS;
+    }
   default:
     break;
   }
-  POCL_ABORT_UNIMPLEMENTED("clGetProgramInfo: unknown param_name");
+  
+  char error_str[64];
+  sprintf(error_str, "clGetProgramInfo: %X", param_name);
+  POCL_ABORT_UNIMPLEMENTED(error_str);
   return CL_INVALID_VALUE;
 }
 POsym(clGetProgramInfo)

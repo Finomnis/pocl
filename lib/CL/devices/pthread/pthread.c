@@ -141,7 +141,7 @@ static thread_arguments* new_thread_arguments ()
 {
   thread_arguments *ta = NULL;
   POCL_LOCK (ta_pool_lock);
-  if (ta = thread_argument_pool)
+  if ((ta = thread_argument_pool))
     {
       LL_DELETE (thread_argument_pool, ta);
       POCL_UNLOCK (ta_pool_lock);
@@ -212,8 +212,6 @@ pocl_pthread_init (cl_device_id device, const char* parameters)
 #ifdef CUSTOM_BUFFER_ALLOCATOR  
   static mem_regions_management* mrm = NULL;
 #endif
-  static int global_mem_id;
-  int i;
 
   // TODO: this checks if the device was already initialized previously.
   // Should we instead have a separate bool field in device, or do the
@@ -483,30 +481,33 @@ pocl_pthread_free (void *data, cl_mem_flags flags, void *ptr)
 #endif
 
 void
-pocl_pthread_read (void *data, void *host_ptr, const void *device_ptr, size_t cb)
+pocl_pthread_read (void *data, void *host_ptr, const void *device_ptr, 
+                   size_t offset, size_t cb)
 {
   if (host_ptr == device_ptr)
     return;
 
-  memcpy (host_ptr, device_ptr, cb);
+  memcpy (host_ptr, device_ptr + offset, cb);
 }
 
 void
-pocl_pthread_write (void *data, const void *host_ptr, void *device_ptr, size_t cb)
+pocl_pthread_write (void *data, const void *host_ptr, void *device_ptr, 
+                    size_t offset, size_t cb)
 {
   if (host_ptr == device_ptr)
     return;
   
-  memcpy (device_ptr, host_ptr, cb);
+  memcpy (device_ptr + offset, host_ptr, cb);
 }
 
 void
-pocl_pthread_copy (void *data, const void *src_ptr, void *__restrict__ dst_ptr, size_t cb)
+pocl_pthread_copy (void *data, const void *src_ptr, size_t src_offset, 
+                   void *__restrict__ dst_ptr, size_t dst_offset, size_t cb)
 {
   if (src_ptr == dst_ptr)
     return;
   
-  memcpy (dst_ptr, src_ptr, cb);
+  memcpy (dst_ptr + dst_offset, src_ptr + src_offset, cb);
 }
 
 #define FALLBACK_MAX_THREAD_COUNT 8
@@ -533,16 +534,12 @@ pocl_pthread_run
 (void *data, 
  _cl_command_node* cmd)
 {
-  struct data *d;
   int error;
-  char workgroup_string[WORKGROUP_STRING_LENGTH];
   unsigned i;
   cl_kernel kernel = cmd->command.run.kernel;
   struct pocl_context *pc = &cmd->command.run.pc;
   struct thread_arguments *arguments;
   static int max_threads = 0; /* this needs to be asked only once */
-
-  d = (struct data *) data;
 
   int num_groups_x = pc->num_groups[0];
   /* TODO: distributing the work groups in the x dimension is not always the
@@ -662,7 +659,7 @@ workgroup_thread (void *p)
           void* devptr = pocl_pthread_malloc(ta->data, 0, sizeof(dev_image_t), NULL);
           arguments[i] = malloc (sizeof (void *));
           *(void **)(arguments[i]) = devptr;       
-          pocl_pthread_write (ta->data, &di, devptr, sizeof(dev_image_t));
+          pocl_pthread_write (ta->data, &di, devptr, 0, sizeof(dev_image_t));
         }
       else if (kernel->arg_info[i].type == POCL_ARG_TYPE_SAMPLER)
         {
@@ -671,7 +668,7 @@ workgroup_thread (void *p)
           arguments[i] = malloc (sizeof (void *));
           *(void **)(arguments[i]) = pocl_pthread_malloc 
             (ta->data, 0, sizeof(dev_sampler_t), NULL);
-          pocl_pthread_write (ta->data, &ds, *(void**)arguments[i], 
+          pocl_pthread_write (ta->data, &ds, *(void**)arguments[i], 0, 
                               sizeof(dev_sampler_t));
         }
       else

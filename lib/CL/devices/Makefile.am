@@ -54,3 +54,5 @@ if BUILD_HPX
 SUBDIRS += hpx
 libpocl_devices_la_LIBADD += hpx/libpocl-devices-hpx.la
 endif
+
+EXTRA_DIST = CMakeLists.txt
