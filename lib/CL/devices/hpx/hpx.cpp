@@ -462,31 +462,34 @@ pocl_hpx_free (void *data, cl_mem_flags flags, void *ptr)
 #endif
 
 void
-pocl_hpx_read (void *data, void *host_ptr, const void *device_ptr, size_t cb)
+pocl_hpx_read (void *data, void *host_ptr, const void *device_ptr,
+               size_t offset, size_t cb)
 {
   if (host_ptr == device_ptr)
     return;
 
-  memcpy (host_ptr, device_ptr, cb);
+  memcpy (host_ptr, device_ptr + offset, cb);
 }
 
 void
-pocl_hpx_write (void *data, const void *host_ptr, void *device_ptr, size_t cb)
+pocl_hpx_write (void *data, const void *host_ptr, void *device_ptr,
+                size_t offset, size_t cb)
 {
   if (host_ptr == device_ptr)
     return;
   
-  memcpy (device_ptr, host_ptr, cb);
+  memcpy (device_ptr, host_ptr + offset, cb);
 }
 
 
 void
-pocl_hpx_copy (void *data, const void *src_ptr, void *__restrict__ dst_ptr, size_t cb)
+pocl_hpx_copy (void *data, const void *src_ptr, size_t src_offset,
+               void *__restrict__ dst_ptr, size_t dst_offset, size_t cb)
 {
   if (src_ptr == dst_ptr)
     return;
   
-  memcpy (dst_ptr, src_ptr, cb);
+  memcpy (dst_ptr + dst_offset, src_ptr + src_offset, cb);
 }
 
 void *
@@ -669,7 +672,7 @@ void workgroup_thread (void* p, nd_pos const& gid)
                     void* devptr = mempools[hpx_worker_id].allocate(sizeof(dev_image_t));
                     arguments[i] = &arguments_ind[i];
                     *(void **)(arguments[i]) = devptr;       
-                    pocl_hpx_write (ta->data, &di, devptr, sizeof(dev_image_t));
+                    pocl_hpx_write (ta->data, &di, devptr, 0, sizeof(dev_image_t));
                   }
                 else if (kernel->arg_info[i].type == POCL_ARG_TYPE_SAMPLER)
                   {
@@ -678,7 +681,7 @@ void workgroup_thread (void* p, nd_pos const& gid)
                     arguments[i] = &arguments_ind[i];
                     *(void **)(arguments[i]) =
                         mempools[hpx_worker_id].allocate(sizeof(dev_sampler_t));
-                    pocl_hpx_write (ta->data, &ds, *(void**)arguments[i],
+                    pocl_hpx_write (ta->data, &ds, *(void**)arguments[i], 0,
                                         sizeof(dev_sampler_t));
                   }
                 else

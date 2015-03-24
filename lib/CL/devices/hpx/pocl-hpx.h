@@ -29,10 +29,6 @@
 #include "config.h"
 #include "prototypes.inc"
 
-#ifndef WORDS_BIGENDIAN
-#define WORDS_BIGENDIAN 0
-#endif
-
 GEN_PROTOTYPES (hpx)
 GEN_PROTOTYPES (basic)
 
