@@ -468,7 +468,7 @@ pocl_hpx_read (void *data, void *host_ptr, const void *device_ptr,
   if (host_ptr == device_ptr)
     return;
 
-  memcpy (host_ptr, static_cast<char *>(device_ptr) + offset, cb);
+  memcpy (host_ptr, static_cast<const char *>(device_ptr) + offset, cb);
 }
 
 void
@@ -478,7 +478,7 @@ pocl_hpx_write (void *data, const void *host_ptr, void *device_ptr,
   if (host_ptr == device_ptr)
     return;
   
-  memcpy (device_ptr, static_cast<char *>(host_ptr) + offset, cb);
+  memcpy (device_ptr, static_cast<const char *>(host_ptr) + offset, cb);
 }
 
 
@@ -490,7 +490,7 @@ pocl_hpx_copy (void *data, const void *src_ptr, size_t src_offset,
     return;
   
   memcpy (static_cast<char *>(dst_ptr) + dst_offset,
-          static_cast<char *>(src_ptr) + src_offset, cb);
+          static_cast<const char *>(src_ptr) + src_offset, cb);
 }
 
 void *
@@ -536,16 +536,9 @@ pocl_hpx_run
 
 
     // initialize shared arrays
-    std::vector<pocl_context *> pc_local(num_hpx_workers);
-    std::vector<void**> wg_arguments(num_hpx_workers);
-    std::vector<char> initialized(num_hpx_workers);
-    for(size_t i = 0; i < num_hpx_workers; i++)
-    {
-        pc_local[i] = NULL;
-        wg_arguments[i] = NULL;
-        initialized[i] = 0;
-    }
-
+    std::vector<pocl_context *> pc_local(num_hpx_workers, NULL);
+    std::vector<void**> wg_arguments(num_hpx_workers, NULL);
+    std::vector<char> initialized(num_hpx_workers, 0);
  
     // initialize thread_arguments 
     struct thread_arguments ta;
